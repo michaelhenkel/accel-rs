@@ -1,30 +1,24 @@
-use anyhow::{anyhow, Error};
 use cli_server::cli_server::cli_server::stats_client::StatsClient;
 use cli_server::cli_server::cli_server::StatsRequest;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 
 #[derive(Parser)]
 struct Arguments {
+    #[command(subcommand)]
     command: Command,
 }
-#[derive(Clone)]
+#[derive(Subcommand, Clone)]
 enum Command {
-    Get(String),
-    Reset(String),
+    Get{
+        interface_name: String,
+    },
+    Reset{
+        interface_name: String,
+    },
 }
 
-impl std::str::FromStr for Command {
-    type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "get" => Ok(Command::Get("all".into())),
-            "reset" => Ok(Command::Reset("all".into())),
-            _ => Err(anyhow!("Invalid Command mode")),
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,16 +27,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Arguments::parse();
 
     match args.command{
-        Command::Get(name) => {
+        Command::Get{interface_name} => {
             let request = tonic::Request::new(StatsRequest {
-                name,
+                name: interface_name,
             });
             let response = client.get(request).await?;
             println!("RESPONSE={:?}", response);
         },
-        Command::Reset(name) => {
+        Command::Reset{interface_name} => {
             let request = tonic::Request::new(StatsRequest {
-                name,
+                name: interface_name
             });
             let response = client.reset(request).await?;
             println!("RESPONSE={:?}", response);

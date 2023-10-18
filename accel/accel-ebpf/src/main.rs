@@ -7,7 +7,7 @@ use aya_bpf::{
     programs::XdpContext,
     maps::HashMap,
 };
-use aya_log_ebpf::info;
+use aya_log_ebpf::{info, warn};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{Ipv4Hdr, IpProto},
@@ -28,7 +28,6 @@ pub fn accel(ctx: XdpContext) -> u32 {
 }
 
 fn try_accel(ctx: XdpContext) -> Result<u32, u32> {
-    info!(&ctx, "received a packet");
     let eth_hdr = ptr_at::<EthHdr>(&ctx, 0)
         .ok_or(xdp_action::XDP_ABORTED)?;
     if unsafe { (*eth_hdr).ether_type } != EtherType::Ipv4 {
@@ -41,23 +40,13 @@ fn try_accel(ctx: XdpContext) -> Result<u32, u32> {
     }
     let udp_hdr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)
         .ok_or(xdp_action::XDP_ABORTED)?;
-    if unsafe { (*udp_hdr).dest } != 4791 {
+    if u16::from_be(unsafe { (*udp_hdr).dest }) != 4791 {
+        warn!(&ctx, "received UDP packet with dest port {}", u16::from_be(unsafe { (*udp_hdr).dest }));
         return Ok(xdp_action::XDP_PASS);
-    }
-    match unsafe { STATSMAP.get_ptr_mut(&0) }{
-        Some(stats) => {
-            unsafe { (*stats).rx += 1}
-        },
-        None => {
-            let stats = Stats{
-                rx: 1,
-            };
-            unsafe { STATSMAP.insert(&0, &stats, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
-        }
     }
     let statsmap = unsafe { STATSMAP.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? };
     unsafe { (*statsmap).rx += 1 };
-    Ok(xdp_action::XDP_DROP)
+    Ok(xdp_action::XDP_REDIRECT)
 }
 
 #[panic_handler]

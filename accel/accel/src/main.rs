@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(short, long, default_value = "eth0")]
+    #[clap(short, long)]
     iface: String,
 }
 
@@ -47,8 +47,20 @@ async fn main() -> Result<(), anyhow::Error> {
     }
     let program: &mut Xdp = bpf.program_mut("accel").unwrap().try_into()?;
     program.load()?;
+    info!("attaching XDP program to interface {}", iface);
     program.attach(&iface, XdpFlags::DRV_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+
+    if let Some(stats_map) = bpf.map_mut("STATSMAP") {
+        let mut stats_map: AyaHashMap<_, u8, Stats> = AyaHashMap::try_from(stats_map).unwrap();
+        let stats = Stats{
+            rx: 0,
+        };
+        stats_map.insert(&0, &stats, 0).unwrap();
+    } else {
+        panic!("STATS map not found");
+    }
+
 
     let (tx, rx) = tokio::sync::mpsc::channel(100);
 

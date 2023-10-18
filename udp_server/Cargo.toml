@@ -1,0 +1,14 @@
+[package]
+name = "udp_server"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4.1", features = ["derive"] }
+pnet = "0.34.0"
+anyhow = "1.0.75"
+accel-common = { path = "../accel/accel-common" }
+socket2 = "0.5.4"
+futures = "0.3.28"
+libc = "0.2.149"
+nix = { version = "0.27.1", features = ["socket"] }

@@ -6,5 +6,7 @@ members = [
     "accel/xtask",
     "accel/accel",
     "accel/accel-common",
+    "udp_client",
+    "udp_server",
 ]
 resolver = "2"
