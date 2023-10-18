@@ -1,0 +1,10 @@
+[workspace]
+
+members = [
+    "cli_server",
+    "cli_client",
+    "accel/xtask",
+    "accel/accel",
+    "accel/accel-common",
+]
+resolver = "2"
