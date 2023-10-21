@@ -8,7 +8,7 @@ publish = false
 aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
 aya-log = { git = "https://github.com/aya-rs/aya" }
 clap = { version = "4.1", features = ["derive"] }
-accel-common = { path = "../accel-common", features = ["user"] }
+common = { path = "../../common", features = ["user"] }
 anyhow = "1"
 env_logger = "0.10"
 libc = "0.2"
@@ -17,6 +17,7 @@ tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net"
 network-types = "0.0.4"
 futures = "0.3.28"
 cli_server = { path = "../../cli_server" }
+udp-server = { path = "../udp-server" }
 
 [[bin]]
 name = "accel"

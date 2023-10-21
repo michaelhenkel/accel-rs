@@ -2,7 +2,7 @@ use tokio::net::UdpSocket;
 use nix::sys::socket::{self, sockopt::RcvBuf};
 use std::io;
 use clap::Parser;
-use accel_common::{BthHdr, CtrlSequence};
+use common::{BthHdr, CtrlSequence};
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -41,7 +41,7 @@ async fn main() {
     let wait = vec![
         tokio::spawn(handle_packet(rx, ctrl_tx)),
         tokio::spawn(run_data_udp_server(opt.port, ip.to_string(), tx, packet_size)),
-        tokio::spawn(run_ctrl_udp_server(opt.ctrl_port, ip.to_string(), ctrl_rx, packet_size)),
+        tokio::spawn(run_ctrl_udp_server(opt.ctrl_port, ip.to_string())),
     ];
     for t in wait {
         t.await.expect("server failed").unwrap();
@@ -61,12 +61,10 @@ async fn run_data_udp_server(port: u16, ip: String, tx: tokio::sync::mpsc::Sende
         match sock.try_recv(&mut b){
             Ok(n) => {
                 unsafe { GLOBAL_COUNTER += 1 };
-                /* 
                 let v = b.to_vec();
                 if let Err(e) = tx.send((v, n)).await{
                     println!("error sending to handler: {}", e);
                 }
-                */
             },
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 continue;
@@ -77,13 +75,12 @@ async fn run_data_udp_server(port: u16, ip: String, tx: tokio::sync::mpsc::Sende
 
         }
     }
-    Ok(())
 }
 
 //global_counter is a global variable
 static mut GLOBAL_COUNTER: i32 = 0;
 
-async fn run_ctrl_udp_server(port: u16, ip: String, rx: tokio::sync::mpsc::Receiver<usize>, packet_size: usize) -> io::Result<()> {
+async fn run_ctrl_udp_server(port: u16, ip: String) -> io::Result<()> {
     
     let bindaddr = format!("{}:{}", ip, port);
     let sock = UdpSocket::bind(&bindaddr).await?;
@@ -181,55 +178,5 @@ async fn handle_packet(mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, usize)>, mu
                 //return Err(e.into());
             }
         }
-
-        /*
-        while let Some((buf, n)) = rx.recv().await{
-            println!("received {} bytes", n);
-            if new_round {
-                start = tokio::time::Instant::now();
-                new_round = false;
-                first_seq = 0;
-                println!("Starting new round");
-                first_packet = true;
-            }
-            let bth_hdr: *const BthHdr = &buf[..n] as *const _ as *const BthHdr; 
-            let bth_hdr: BthHdr = unsafe { *bth_hdr };
-            let seq_list = bth_hdr.psn_seq;
-            let seq = u32::from_be_bytes([0, seq_list[0], seq_list[1], seq_list[2]]);
-            let res = u8::from_be(bth_hdr.res);
-            if prev_seq > 0 {
-                if prev_seq + 1 != seq {
-                    out_of_order_packets += 1;
-                }
-            }
-            if first_packet {
-                first_seq = seq;
-                first_packet = false;
-            }
-            prev_seq = seq; 
-            packets += 1;
-            total_bytes += n;
-            if res == 1 {
-                last_seq = seq;
-                end_of_round = true;
-            }
-            if end_of_round {
-                let elapsed = start.elapsed().as_secs_f64();
-                let mbps = (total_bytes as f64 * 8.0) / 1_000_000.0 / elapsed;
-                let total_megabytes = total_bytes as f64 / 1_000_000.0;
-                let pps = packets as f64 / elapsed;
-                let packet_loss = (last_seq - first_seq) - packets as u32 + 1;
-                println!("{} packets received, {} out of order packets, {} MB received, {} MB/s, {} pps, {} lost packets", packets, out_of_order_packets, total_megabytes, mbps as u64, pps as u64, packet_loss);
-                end_of_round = false;
-                new_round = true;
-                prev_seq = 0;
-                packets = 0;
-                out_of_order_packets = 0;
-                total_bytes = 0;
-            } 
-
-        }
-        */
     }
-    Ok(())
 }

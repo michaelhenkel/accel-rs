@@ -3,7 +3,11 @@
     "rust-analyzer.checkOnSave.allTargets": false,
     "rust-analyzer.linkedProjects": [
         "./cli_server/Cargo.toml",
-        "./accel/accel-ebpf/Cargo.toml"
+        "./accel/accel-ebpf/Cargo.toml",
+        "./accel/udp-server-ebpf/Cargo.toml",
+        "./accel/udp-server/Cargo.toml",
+        "./socket/Cargo.toml",
+
     ],
     "rust-analyzer.showUnlinkedFileNotification": false
 }

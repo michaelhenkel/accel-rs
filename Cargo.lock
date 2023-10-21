@@ -6,26 +6,19 @@ version = 3
 name = "accel"
 version = "0.1.0"
 dependencies = [
- "accel-common",
  "anyhow",
- "aya",
- "aya-log",
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-log 0.1.13",
  "clap",
  "cli_server",
+ "common",
  "env_logger",
  "futures",
  "libc",
  "log",
  "network-types",
  "tokio",
-]
-
-[[package]]
-name = "accel-common"
-version = "0.1.0"
-dependencies = [
- "aya",
- "aya-bpf",
+ "udp-server",
 ]
 
 [[package]]
@@ -42,6 +35,18 @@ name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
+
+[[package]]
+name = "afxdp"
+version = "0.4.0"
+source = "git+https://github.com/michaelhenkel/afxdp-rs#9abf0be1ad24ba4c93ae4e6a4bb058ef1ebc189e"
+dependencies = [
+ "arraydeque",
+ "errno 0.2.8",
+ "libbpf-sys",
+ "libc",
+ "thiserror",
+]
 
 [[package]]
 name = "ahash"
@@ -122,6 +127,12 @@ name = "anyhow"
 version = "1.0.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
+
+[[package]]
+name = "arraydeque"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0ffd3d69bd89910509a5d31d1f1353f38ccffdd116dd0099bbd6627f7bd8ad8"
 
 [[package]]
 name = "assert_matches"
@@ -216,7 +227,25 @@ dependencies = [
 [[package]]
 name = "aya"
 version = "0.11.0"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "758d57288601ecc9d149e3413a5f23d6b72c0373febc97044d4f4aa149033b5e"
+dependencies = [
+ "bitflags 1.3.2",
+ "bytes",
+ "futures",
+ "lazy_static",
+ "libc",
+ "log",
+ "object 0.28.4",
+ "parking_lot",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "aya"
+version = "0.11.0"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "assert_matches",
  "aya-obj",
@@ -225,7 +254,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "object",
+ "object 0.32.1",
  "thiserror",
  "tokio",
 ]
@@ -233,7 +262,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "aya-bpf-bindings",
  "aya-bpf-cty",
@@ -244,7 +273,7 @@ dependencies = [
 [[package]]
 name = "aya-bpf-bindings"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "aya-bpf-cty",
 ]
@@ -252,12 +281,12 @@ dependencies = [
 [[package]]
 name = "aya-bpf-cty"
 version = "0.2.1"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 
 [[package]]
 name = "aya-bpf-macros"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -267,11 +296,25 @@ dependencies = [
 
 [[package]]
 name = "aya-log"
-version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+version = "0.1.11-dev.0"
+source = "git+https://github.com/aya-rs/aya-log#f3202ac6684c75a3ad6741c6ac2e0dd24119d2fc"
 dependencies = [
- "aya",
- "aya-log-common",
+ "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "aya-log-common 0.1.11-dev.0",
+ "bytes",
+ "dyn-fmt",
+ "log",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "aya-log"
+version = "0.1.13"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
+dependencies = [
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-log-common 0.1.13",
  "bytes",
  "log",
  "thiserror",
@@ -280,22 +323,60 @@ dependencies = [
 
 [[package]]
 name = "aya-log-common"
+version = "0.1.11-dev.0"
+source = "git+https://github.com/aya-rs/aya-log#f3202ac6684c75a3ad6741c6ac2e0dd24119d2fc"
+dependencies = [
+ "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "aya-log-common"
 version = "0.1.13"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "num_enum",
 ]
 
 [[package]]
+name = "aya-log-ebpf"
+version = "0.1.0"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
+dependencies = [
+ "aya-bpf",
+ "aya-log-common 0.1.13",
+ "aya-log-ebpf-macros",
+]
+
+[[package]]
+name = "aya-log-ebpf-macros"
+version = "0.1.0"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
+dependencies = [
+ "aya-log-common 0.1.13",
+ "aya-log-parser",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "aya-log-parser"
+version = "0.1.11-dev.0"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
+dependencies = [
+ "aya-log-common 0.1.13",
+]
+
+[[package]]
 name = "aya-obj"
 version = "0.1.0"
-source = "git+https://github.com/aya-rs/aya#8154fb79d3618e43b53059ff1590843790c73fe2"
+source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "bytes",
  "core-error",
  "hashbrown 0.14.1",
  "log",
- "object",
+ "object 0.32.1",
  "thiserror",
 ]
 
@@ -310,7 +391,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "miniz_oxide",
- "object",
+ "object 0.32.1",
  "rustc-demangle",
 ]
 
@@ -418,9 +499,9 @@ dependencies = [
 name = "cli_server"
 version = "0.1.0"
 dependencies = [
- "accel-common",
  "anyhow",
  "clap",
+ "common",
  "log",
  "prost",
  "serde",
@@ -437,6 +518,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-bpf",
+ "aya-log-ebpf",
+ "network-types",
+]
+
+[[package]]
 name = "core-error"
 version = "0.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,6 +535,12 @@ checksum = "efcdb2972eb64230b4c50646d8498ff73f5128d196a90c7236eec4cbe8619b8f"
 dependencies = [
  "version_check",
 ]
+
+[[package]]
+name = "dyn-fmt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a0836c9bd73a9d3ca55b0effc5b1eedf96dd13ef994389bcac6d4d33c46188"
 
 [[package]]
 name = "either"
@@ -472,12 +569,33 @@ checksum = "5443807d6dff69373d433ab9ef5378ad8df50ca6298caf15de6e52e24aaf54d5"
 
 [[package]]
 name = "errno"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f639046355ee4f37944e44f60642c6f3a7efa3cf6b78c78a0d989a8ce6c396a1"
+dependencies = [
+ "errno-dragonfly",
+ "libc",
+ "winapi",
+]
+
+[[package]]
+name = "errno"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3e13f66a2f95e32a39eaa81f6b95d42878ca0e1db0c7543723dfe12557e860"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "errno-dragonfly"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
@@ -804,6 +922,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
+name = "libbpf-sys"
+version = "0.7.1+v0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58f827f39ef9181560ee49c82bbdc8e8441c56404f62dc6eef1384113fd4c268"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,6 +1105,15 @@ dependencies = [
 
 [[package]]
 name = "object"
+version = "0.28.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e42c982f2d955fac81dd7e1d0e1426a7d702acd9c98d19ab01083a6a0328c424"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "object"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9cf5f9dd3933bd50a9e1f149ec995f39ae2c496d31fd772c1fd45ebc27e902b0"
@@ -1066,6 +1203,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26072860ba924cbfa98ea39c8c19b4dd6a4a25423dbdf219c1eca91aa0cf6964"
 
 [[package]]
 name = "pnet"
@@ -1350,7 +1493,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "745ecfa778e66b2b63c88a61cb36e0eea109e803b0b86bf9879fbc77c70e86ed"
 dependencies = [
  "bitflags 2.4.1",
- "errno",
+ "errno 0.3.5",
  "libc",
  "linux-raw-sys",
  "windows-sys",
@@ -1430,6 +1573,20 @@ name = "smallvec"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+
+[[package]]
+name = "socket"
+version = "0.1.0"
+dependencies = [
+ "afxdp",
+ "arraydeque",
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-bpf",
+ "aya-log 0.1.11-dev.0",
+ "libbpf-sys",
+ "log",
+ "network-types",
+]
 
 [[package]]
 name = "socket2"
@@ -1691,12 +1848,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3528ecfd12c466c6f163363caf2d02a71161dd5e1cc6ae7b34207ea2d42d81ed"
 
 [[package]]
+name = "udp-server"
+version = "0.1.0"
+dependencies = [
+ "afxdp",
+ "anyhow",
+ "arraydeque",
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-bpf",
+ "aya-log-ebpf",
+ "common",
+ "libbpf-sys",
+ "log",
+ "network-types",
+ "socket",
+]
+
+[[package]]
 name = "udp_client"
 version = "0.1.0"
 dependencies = [
- "accel-common",
  "anyhow",
  "clap",
+ "common",
  "log",
  "netlink-packet-route",
  "network-types",
@@ -1711,9 +1885,9 @@ dependencies = [
 name = "udp_server"
 version = "0.1.0"
 dependencies = [
- "accel-common",
  "anyhow",
  "clap",
+ "common",
  "futures",
  "libc",
  "nix",

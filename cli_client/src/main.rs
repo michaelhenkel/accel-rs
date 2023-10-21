@@ -11,32 +11,38 @@ struct Arguments {
 #[derive(Subcommand, Clone)]
 enum Command {
     Get{
-        interface_name: String,
+        #[clap(short, long)]
+        interface: String,
+        #[clap(short, long)]
+        program: String
     },
     Reset{
-        interface_name: String,
+        #[clap(short, long)]
+        interface: String,
+        #[clap(short, long)]
+        program: String
     },
 }
 
-
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = StatsClient::connect("http://[::1]:50051").await?;
+    let mut client = StatsClient::connect("http://127.0.0.1:50051").await?;
 
     let args = Arguments::parse();
 
     match args.command{
-        Command::Get{interface_name} => {
+        Command::Get{interface, program} => {
             let request = tonic::Request::new(StatsRequest {
-                name: interface_name,
+                interface,
+                program, 
             });
             let response = client.get(request).await?;
-            println!("RESPONSE={:?}", response);
+            println!("RESPONSE={:?}", response.into_inner().interface_stats.unwrap());
         },
-        Command::Reset{interface_name} => {
+        Command::Reset{interface, program} => {
             let request = tonic::Request::new(StatsRequest {
-                name: interface_name
+                interface,
+                program, 
             });
             let response = client.reset(request).await?;
             println!("RESPONSE={:?}", response);

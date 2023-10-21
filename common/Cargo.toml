@@ -1,5 +1,5 @@
 [package]
-name = "accel-common"
+name = "common"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,6 +10,8 @@ user = ["aya"]
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya", optional = true }
 aya-bpf = { git = "https://github.com/aya-rs/aya" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
+network-types = "0.0.4"
 
 [lib]
 path = "src/lib.rs"

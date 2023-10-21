@@ -14,7 +14,7 @@ serde_yaml = "0.9.25"
 tonic = "0.10"
 prost = "0.12"
 anyhow = "1.0.75"
-accel-common = { path = "../accel/accel-common" }
+common = { path = "../common" }
 
 [build-dependencies]
 tonic-build = "0.10"

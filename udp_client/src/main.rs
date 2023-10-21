@@ -2,7 +2,7 @@ use rand::seq;
 use tokio::net::UdpSocket;
 use std::net::SocketAddr;
 use clap::Parser;
-use accel_common::{BthHdr, CtrlSequence};
+use common::{BthHdr, CtrlSequence};
 use log::info;
 use serde::{Deserialize, Serialize};
 use serde_yaml;

@@ -1,5 +1,5 @@
 [package]
-name = "accel-ebpf"
+name = "udp-server-ebpf"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,7 +10,7 @@ common = { path = "../../common" }
 network-types = "0.0.4"
 
 [[bin]]
-name = "accel"
+name = "udp-server"
 path = "src/main.rs"
 
 [profile.dev]
