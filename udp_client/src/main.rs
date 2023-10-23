@@ -1,9 +1,7 @@
-use rand::seq;
 use tokio::net::UdpSocket;
 use std::net::SocketAddr;
 use clap::Parser;
 use common::{BthHdr, CtrlSequence};
-use log::info;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::fs::File;
@@ -100,7 +98,7 @@ impl BthSeq{
             qp_id,
         }
     }
-    fn add_msg(&mut self, bth_seq_type: BthSeqType, seq: u32, last: bool, pre: bool){
+    fn add_msg(&mut self, bth_seq_type: BthSeqType, seq: u32, last: bool, _pre: bool){
         let seq = u32::to_be(seq);
         let seq = seq.to_le_bytes();
         let mut bth_hdr = BthHdr{
@@ -162,7 +160,7 @@ async fn send_messages(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32,
     let mut seq_counter = start;
     let tot_seq = messages * packets;
     let mut num_seq_counter = 0;
-    for i in 0..messages{
+    for _i in 0..messages{
         let mut sequence = Vec::new();
         for j in 0..packets{
             num_seq_counter += 1;

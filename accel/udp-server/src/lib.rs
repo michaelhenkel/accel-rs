@@ -1,10 +1,5 @@
-use std::{sync::Arc, future, collections::HashMap};
-
-use aya::{
-    maps::{XskMap, MapData},
-    Bpf
-};
-use std::os::fd::{RawFd, AsRawFd};
+use std::collections::HashMap;
+use aya::maps::{XskMap, MapData};
 use socket::{
     Socket,
     SocketRxTx,
@@ -12,9 +7,8 @@ use socket::{
     BufCustom
 };
 use log::info;
-use afxdp::{mmap_area::{MmapArea, MmapAreaOptions}, buf_mmap::BufMmap, socket::SocketRx};
+use afxdp::mmap_area::{MmapArea, MmapAreaOptions};
 use tokio::task::JoinHandle;
-
 
 const BUFF_SIZE: usize = 2048;
 const BUF_NUM: usize = 65535;
@@ -69,7 +63,7 @@ impl UdpServer{
                     match rx.try_recv(&mut rx_socket.v, BATCH_SIZE, custom) {
                         Ok(n) => {
                             if n > 0 {
-                                while let Some(v) = rx_socket.v.pop_front(){
+                                while let Some(_v) = rx_socket.v.pop_front(){
                                     info!("received packet");
                                 }
                                 rx_socket.fq_deficit += n;

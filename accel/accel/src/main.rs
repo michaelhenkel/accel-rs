@@ -248,17 +248,13 @@ async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: to
     }
     loop {
         while let Some(stats_msg) = rx.recv().await{
-            info!("stats handler received stats request for interface {}", stats_msg.iface);
             if let Some(iface_idx) = iface_map.get(&stats_msg.iface){
-                info!("stats handler found intf index {} for interface {}", iface_idx, stats_msg.iface);
                 if let Ok(stats) = stats_map.get(iface_idx, 0){
-                    info!("stats handler founds stats  interface {} with index {}", stats_msg.iface, iface_idx);
                     let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
                         rx: stats.rx as i32,
                     };
-                    info!("stats handler sending stats for interface {}", stats_msg.iface);
                     if let Err(e) = stats_msg.tx.send(iface_stats){
-                        warn!("Failed to send stats to client: {}", e.rx);
+                        panic!("Failed to send stats to client: {}", e.rx);
                     }
                 } else {
                     info!("stats handler failed to find stats for interface {} index {}", stats_msg.iface, iface_idx);

@@ -1,19 +1,25 @@
-use aya_bpf::helpers::bpf_redirect_map;
-use aya::maps::{HashMap, MapData, XskMap};
-use log::{info, warn};
 use arraydeque::{ArrayDeque, Wrapping};
-use afxdp::mmap_area::{MmapArea, MmapAreaOptions};
-use afxdp::socket::{Socket as AfXdpSocket, SocketOptions, SocketRx, SocketTx, SocketNewError};
-use afxdp::umem::{Umem, UmemCompletionQueue, UmemFillQueue};
-use afxdp::PENDING_LEN;
-use afxdp::{buf::Buf, buf_mmap::BufMmap};
+use afxdp::{
+    mmap_area::MmapArea,
+    socket::{
+        Socket as AfXdpSocket,
+        SocketOptions,
+        SocketRx,
+        SocketTx,
+        SocketNewError
+    },
+    umem::{
+        Umem,
+        UmemCompletionQueue,
+        UmemFillQueue
+    },
+    PENDING_LEN,
+    buf_mmap::BufMmap,
+};
 use libbpf_sys::{
     XSK_RING_CONS__DEFAULT_NUM_DESCS,
     XSK_RING_PROD__DEFAULT_NUM_DESCS,
-    xsk_socket__update_xskmap,
-    xsk_socket,
 };
-use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::cmp::min;
 
@@ -52,7 +58,7 @@ impl <'a>Socket<'a>{
         options.zero_copy_mode = zero_copy;
         options.copy_mode = !zero_copy;
         
-        let (skt, skt_type) = match socket_type{
+        let (_skt, skt_type) = match socket_type{
             SocketRxTx::Rx => {
                 let socket: Result<(Arc<AfXdpSocket<'_, BufCustom>>, SocketRx<'_, BufCustom>), SocketNewError> = AfXdpSocket::new_rx(
                     umem1.clone(),

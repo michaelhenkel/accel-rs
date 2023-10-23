@@ -37,7 +37,7 @@ async fn main() {
     let ip = get_get_ip_address_from_interface(&opt.iface).unwrap();
     println!("Starting server on portx {}:{}", ip, opt.port);
     let (tx, rx) = tokio::sync::mpsc::channel(100000);
-    let (ctrl_tx, ctrl_rx) = tokio::sync::mpsc::channel(1);
+    let (ctrl_tx, _ctrl_rx) = tokio::sync::mpsc::channel(1);
     let wait = vec![
         tokio::spawn(handle_packet(rx, ctrl_tx)),
         tokio::spawn(run_data_udp_server(opt.port, ip.to_string(), tx, packet_size)),
@@ -49,7 +49,7 @@ async fn main() {
     
 }
 
-async fn run_data_udp_server(port: u16, ip: String, tx: tokio::sync::mpsc::Sender<(Vec<u8>, usize)>, packet_size: usize) -> io::Result<()> {
+async fn run_data_udp_server(port: u16, ip: String, tx: tokio::sync::mpsc::Sender<(Vec<u8>, usize)>, _packet_size: usize) -> io::Result<()> {
     
     let bindaddr = format!("{}:{}", ip, port);
     let sock = UdpSocket::bind(&bindaddr).await?;
@@ -115,7 +115,7 @@ async fn run_ctrl_udp_server(port: u16, ip: String) -> io::Result<()> {
     }
 }
 
-async fn handle_packet(mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, usize)>, mut tx: tokio::sync::mpsc::Sender<usize>) -> io::Result<()> {
+async fn handle_packet(mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, usize)>, mut _tx: tokio::sync::mpsc::Sender<usize>) -> io::Result<()> {
     println!("starting packet handler");
     let mut prev_seq = 0;
     let mut packets = 0;
@@ -174,7 +174,7 @@ async fn handle_packet(mut rx: tokio::sync::mpsc::Receiver<(Vec<u8>, usize)>, mu
                     total_bytes = 0;
                 } 
             },
-            Err(e) => {
+            Err(_e) => {
                 //return Err(e.into());
             }
         }

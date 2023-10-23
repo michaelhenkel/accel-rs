@@ -93,7 +93,7 @@ pub struct Stats {
 unsafe impl aya::Pod for Stats {}
 
 #[inline(always)]
-fn mac_to_int(mac: [u8;6]) -> u64 {
+fn _mac_to_int(mac: [u8;6]) -> u64 {
     let mut mac_dec: u64 = 0;
     for i in 0..6 {
         mac_dec = mac_dec << 8;
@@ -103,13 +103,13 @@ fn mac_to_int(mac: [u8;6]) -> u64 {
 }
 
 #[inline(always)]
-fn csum(data_start: *mut u32, data_size: u32, csum: u32) -> u16 {
+fn _csum(data_start: *mut u32, data_size: u32, csum: u32) -> u16 {
     let cs = unsafe { bpf_csum_diff(0 as *mut u32, 0, data_start, data_size, csum) };
-    csum_fold_helper(cs)
+    _csum_fold_helper(cs)
 }
 
 #[inline(always)]
-fn csum_fold_helper(csum: i64) -> u16 {
+fn _csum_fold_helper(csum: i64) -> u16 {
     let mut sum = csum;
     for _ in 0..4 {
         if sum >> 16 != 0 {
@@ -120,7 +120,7 @@ fn csum_fold_helper(csum: i64) -> u16 {
 }
 
 #[inline(always)]
-fn get_v4_next_hop_from_flow_table(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
+fn _get_v4_next_hop_from_flow_table(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
     let ipv4_hdr_ptr = ptr_at::<Ipv4Hdr>(&ctx, EthHdr::LEN)?;
     let udp_hdr_ptr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
     let mut flow_key: FlowKey = unsafe { zeroed() };
@@ -141,7 +141,7 @@ fn get_v4_next_hop_from_flow_table(ctx: &XdpContext, flow_table: HashMap<FlowKey
 }
 
 #[inline(always)]
-fn get_next_hop(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
+fn _get_next_hop(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
     let ip_hdr_ptr = ptr_at_mut::<Ipv4Hdr>(&ctx, EthHdr::LEN)?;
     let udp_hdr_ptr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
     let dst_ip = unsafe { (*ip_hdr_ptr).dst_addr };
