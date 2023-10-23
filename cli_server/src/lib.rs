@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use log::info;
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod cli_server;
@@ -62,6 +63,7 @@ impl Stats for CliServer{
 
 pub async fn run(intf_tx_map: HashMap<String, tokio::sync::mpsc::Sender<StatsMsg>>) -> anyhow::Result<()>{
     let addr = "127.0.0.1:50051".parse().unwrap();
+    info!("CLI server running at {}", addr);
     let cli_server = CliServer::new(intf_tx_map);
     let res = Server::builder()
         .add_service(StatsServer::new(cli_server))

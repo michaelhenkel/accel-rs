@@ -39,7 +39,6 @@ pub fn udp_server(ctx: XdpContext) -> u32 {
     }
 }
 
-
 fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
     let eth_hdr = ptr_at::<EthHdr>(&ctx, 0)
         .ok_or(xdp_action::XDP_ABORTED)?;
@@ -58,9 +57,14 @@ fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
         return Ok(xdp_action::XDP_PASS);
     }
     let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
+    let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+    info!(
+        &ctx,
+        "received UDP packet on interface idx {} queue {}",
+        if_idx, queue_idx
+    );
     let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
     unsafe { (*statsmap).rx += 1 };
-    let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
     XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64)
 }
 

@@ -17,8 +17,8 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::cmp::min;
 
-const COMPLETION_RING_SIZE: u32 = XSK_RING_CONS__DEFAULT_NUM_DESCS * 32;
-const FILL_RING_SIZE: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS * 32;
+const COMPLETION_RING_SIZE: u32 = XSK_RING_CONS__DEFAULT_NUM_DESCS;
+const FILL_RING_SIZE: u32 = XSK_RING_PROD__DEFAULT_NUM_DESCS;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BufCustom {}
@@ -37,7 +37,7 @@ pub enum SocketRxTx{
 }
 
 impl <'a>Socket<'a>{
-    pub fn new(area: Arc<MmapArea<'a, BufCustom>>, bufs: &mut Vec<BufMmap<'a, BufCustom>>, socket_type: SocketRxTx, intf: String, buf_num: usize) -> Socket<'a> {
+    pub fn new(area: Arc<MmapArea<'a, BufCustom>>, bufs: &mut Vec<BufMmap<'a, BufCustom>>, socket_type: SocketRxTx, intf: String, buf_num: usize, zero_copy: bool) -> Socket<'a> {
         let intf = intf.as_str();
         let umem = Umem::new(
             area.clone(),
@@ -49,8 +49,8 @@ impl <'a>Socket<'a>{
             Err(err) => panic!("no umem for you: {:?}", err),
         };
         let mut options = SocketOptions::default();
-        options.zero_copy_mode = false;
-        options.copy_mode = true;
+        options.zero_copy_mode = zero_copy;
+        options.copy_mode = !zero_copy;
         
         let (skt, skt_type) = match socket_type{
             SocketRxTx::Rx => {

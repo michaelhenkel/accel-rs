@@ -7,6 +7,7 @@ name = "accel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
  "aya-log 0.1.13",
  "clap",
@@ -1858,10 +1859,12 @@ dependencies = [
  "aya-bpf",
  "aya-log-ebpf",
  "common",
+ "futures",
  "libbpf-sys",
  "log",
  "network-types",
  "socket",
+ "tokio",
 ]
 
 [[package]]

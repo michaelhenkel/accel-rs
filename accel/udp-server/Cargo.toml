@@ -15,5 +15,8 @@ arraydeque = "0.4"
 anyhow = "1"
 log = "0.4"
 aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
+tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+futures = "0.3.28"
+
 
 

@@ -4,9 +4,10 @@ use aya_log::BpfLogger;
 use clap::{Parser, Subcommand};
 use log::{info, warn, debug};
 use tokio::signal;
-use cli_server;
+use cli_server::{self, StatsMsg};
 use common::Stats;
 use anyhow::Context;
+use tokio::task::JoinHandle;
 use std::{
     collections::HashMap,
     str::FromStr,
@@ -14,6 +15,7 @@ use std::{
     io::{Error, ErrorKind}
 };
 use udp_server;
+use async_trait::async_trait;
 
 #[derive(Parser)]
 struct Opt {
@@ -22,7 +24,7 @@ struct Opt {
 }
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
-enum ProgramName{
+pub enum ProgramName{
     Accel,
     UdpServer,
 }
@@ -120,49 +122,37 @@ async fn main() -> Result<(), anyhow::Error> {
                     interface_map.insert(iface.clone(), intf_idx);
                 }
 
-                for (intf, intf_idx) in &interface_map{
-                    if let Some(stats_map) = bpf.map_mut("STATSMAP") {
-                        let mut stats_map: AyaHashMap<_, u32, Stats> = AyaHashMap::try_from(stats_map).unwrap();
-                        let stats = Stats{
-                            rx: 0,
-                        };
-                        info!("Inserting stats for interface {} into STATS map", intf_idx);
-                        stats_map.insert(intf_idx, &stats, 0).unwrap();
-                    } else {
-                        panic!("STATS map not found");
-                    }
-                    match program_name{
-                        ProgramName::UdpServer => {           
-                            let xsk_map = if let Some(xsk_map) = bpf.take_map("XSKMAP") {
-                                XskMap::try_from(xsk_map)?   
-                            } else {
-                                panic!("XSKMAP map not found");
-                            };
-                            let mut udp_s = udp_server::UdpServer::new(intf.to_string(), intf_idx.clone(), xsk_map);
-                            let udp_server_handler = tokio::spawn(async move {
-                                if let Err(e) = udp_s.run().await{
-                                    return Err(e);
-                                }
-                                Ok(())
-                            });
-                            join_handlers.push(udp_server_handler);
-                        },
-                        _ => {}
-                    }
-                }
+                info!("setting up stats handler for program {}", name);
                 let (tx, rx) = tokio::sync::mpsc::channel(100);
-                let stats_handler_jh = tokio::spawn(async move {
-                    if let Err(e) = stats_handler(bpf, interface_map, rx).await{
+
+                let program_handler: Box<dyn ProgramHandler> = match program_name{
+                    ProgramName::UdpServer => {
+                        Box::new(UdpServerHandler{})
+                    },
+                    ProgramName::Accel => {
+                        Box::new(AccelHandler{})
+                    },
+                };
+                
+
+                let jh = tokio::spawn(async move {
+                    info!("program handler spawned");
+                    if let Err(e) = program_handler.handle(bpf, interface_map, rx).await{
                         return Err(e);
                     }
                     Ok(())
                 });
-                program_tx_map.insert(name, tx.clone());
-                join_handlers.push(stats_handler_jh);
+                join_handlers.push(jh);
+
+                program_tx_map.insert(name.clone(), tx.clone());
+    
+                info!("stats handler set up for program {}", name);
             }
         }
     }
+    info!("preparing CLI server start");
     let cli_server_handler = tokio::spawn(async move {
+        info!("Starting CLI server");
         if let Err(e) = cli_server::run(program_tx_map).await{
             return Err(e);
         }
@@ -180,24 +170,101 @@ async fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn stats_handler(bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: tokio::sync::mpsc::Receiver<cli_server::StatsMsg>) -> anyhow::Result<()>{
-    let stats_map = if let Some(stats_map) = bpf.map("STATSMAP"){
+pub struct ProgramMsg{
+    pub program_name: ProgramName,
+    pub tx: tokio::sync::oneshot::Sender<String>,
+}
+
+#[async_trait]
+trait ProgramHandler: Send + Sync{
+    async fn handle(&self, bpf: Bpf, interface_map: HashMap<String, u32>, stats_rx: tokio::sync::mpsc::Receiver<StatsMsg>) -> anyhow::Result<()>;
+}
+
+pub struct AccelHandler{
+
+}
+
+#[async_trait]
+impl ProgramHandler for AccelHandler{
+    async fn handle(&self, bpf: Bpf, interface_map: HashMap<String, u32>, stats_rx: tokio::sync::mpsc::Receiver<StatsMsg>) -> anyhow::Result<()>{
+        let mut join_handlers: Vec<JoinHandle<Result<(), anyhow::Error>>> = Vec::new();
+        let stats_handler_jh = tokio::spawn(async move {
+            stats_handler(bpf, interface_map, stats_rx).await?;
+            Ok(())
+        });
+        join_handlers.push(stats_handler_jh);
+        futures::future::join_all(join_handlers).await;
+        Ok(())
+    }
+}
+
+pub struct UdpServerHandler{
+
+}
+
+#[async_trait]
+impl ProgramHandler for UdpServerHandler{
+    async fn handle(&self, mut bpf: Bpf, interface_map: HashMap<String, u32>, stats_rx: tokio::sync::mpsc::Receiver<StatsMsg>) -> anyhow::Result<()>{
+        info!("udp server handler started");  
+        let mut join_handlers = Vec::new();
+        
+        let xsk_map = if let Some(xsk_map) = bpf.take_map("XSKMAP") {
+            XskMap::try_from(xsk_map)?   
+        } else {
+            panic!("XSKMAP map not found");
+        };
+        let udp_s = udp_server::UdpServer::new(false, interface_map.clone());
+        let udp_server_jh = tokio::spawn(async move {
+            if let Err(e) = udp_s.run(xsk_map).await{
+                return Err(e);
+            }
+            Ok(())
+        });
+
+        join_handlers.push(udp_server_jh);
+
+        let stats_handler_jh: JoinHandle<Result<(), anyhow::Error>> = tokio::spawn(async move {
+            stats_handler(bpf, interface_map, stats_rx).await.map_err(|e| anyhow::anyhow!("stats handler failed: {}", e))?;
+            Ok(())
+        });
+        join_handlers.push(stats_handler_jh);
+        futures::future::join_all(join_handlers).await;
+
+        Ok(())
+    }
+}
+
+async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: tokio::sync::mpsc::Receiver<cli_server::StatsMsg>) -> anyhow::Result<()>{
+    info!("stats handler spawned");
+    let mut stats_map = if let Some(stats_map) = bpf.map_mut("STATSMAP"){
         let stats_map: AyaHashMap<_, u32, Stats> = AyaHashMap::try_from(stats_map).unwrap();
         stats_map
     } else {
         panic!("STATS map not found");
     };
+    for (intf, intf_idx) in &iface_map {
+        info!("stats handler setting stats map for interface {} with index {}", intf, intf_idx);
+        stats_map.insert(intf_idx.clone(), Stats::default(), 0)?;
+    }
     loop {
         while let Some(stats_msg) = rx.recv().await{
+            info!("stats handler received stats request for interface {}", stats_msg.iface);
             if let Some(iface_idx) = iface_map.get(&stats_msg.iface){
+                info!("stats handler found intf index {} for interface {}", iface_idx, stats_msg.iface);
                 if let Ok(stats) = stats_map.get(iface_idx, 0){
+                    info!("stats handler founds stats  interface {} with index {}", stats_msg.iface, iface_idx);
                     let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
                         rx: stats.rx as i32,
                     };
+                    info!("stats handler sending stats for interface {}", stats_msg.iface);
                     if let Err(e) = stats_msg.tx.send(iface_stats){
                         warn!("Failed to send stats to client: {}", e.rx);
                     }
+                } else {
+                    info!("stats handler failed to find stats for interface {} index {}", stats_msg.iface, iface_idx);
                 }
+            } else {
+                info!("stats handler failed to find index interface {}", stats_msg.iface);
             }
         }
     }
