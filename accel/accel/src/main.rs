@@ -1,11 +1,15 @@
+use aya::maps::MapData;
 use aya::programs::{Xdp, XdpFlags};
-use aya::{include_bytes_aligned, Bpf, maps::{HashMap as AyaHashMap, XskMap}};
+use aya::{include_bytes_aligned, Bpf, maps::{HashMap as AyaHashMap, XskMap, lpm_trie::{LpmTrie, Key}}};
 use aya_log::BpfLogger;
 use clap::{Parser, Subcommand};
 use log::{info, warn, debug};
 use tokio::signal;
 use cli_server::{self, StatsMsg};
-use common::Stats;
+use common::{
+    Stats,
+    RouteNextHop
+};
 use anyhow::Context;
 use tokio::task::JoinHandle;
 use std::{
@@ -15,6 +19,7 @@ use std::{
     io::{Error, ErrorKind}
 };
 use udp_server;
+use router;
 use async_trait::async_trait;
 
 #[derive(Parser)]
@@ -27,6 +32,7 @@ struct Opt {
 pub enum ProgramName{
     Accel,
     UdpServer,
+    Router,
 }
 
 impl FromStr for ProgramName{
@@ -35,6 +41,7 @@ impl FromStr for ProgramName{
         match s {
             "accel" => Ok(ProgramName::Accel),
             "udp_server" => Ok(ProgramName::UdpServer),
+            "router" => Ok(ProgramName::Router),
             _ => Err(format!("Program type {} not found", s)),
         }
     }
@@ -45,6 +52,7 @@ impl ToString for ProgramName{
         match self {
             ProgramName::Accel => "accel".to_string(),
             ProgramName::UdpServer => "udp_server".to_string(),
+            ProgramName::Router => "router".to_string(),
         }
     }
 }
@@ -93,6 +101,8 @@ async fn main() -> Result<(), anyhow::Error> {
             "../../target/bpfel-unknown-none/release/accel")),
         (ProgramName::UdpServer, include_bytes_aligned!(
             "../../target/bpfel-unknown-none/release/udp-server")),
+        (ProgramName::Router, include_bytes_aligned!(
+            "../../target/bpfel-unknown-none/release/router")),
     ]);
     
     for p in opt.programs{
@@ -104,8 +114,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     let bpf = Bpf::load(b).context("failed to load BPF program")?;
                     bpf
                 } else {
-                    warn!("Program {} not found", name);
-                    continue;
+                    panic!("Program {} not found", name);
                 };        
                 if let Err(e) = BpfLogger::init(&mut bpf) {
                     warn!("failed to initialize eBPF logger: {}", e);
@@ -132,6 +141,9 @@ async fn main() -> Result<(), anyhow::Error> {
                     ProgramName::Accel => {
                         Box::new(AccelHandler{})
                     },
+                    ProgramName::Router => {
+                        Box::new(RouterHandler{})
+                    }
                 };
                 
 
@@ -178,6 +190,54 @@ pub struct ProgramMsg{
 #[async_trait]
 trait ProgramHandler: Send + Sync{
     async fn handle(&self, bpf: Bpf, interface_map: HashMap<String, u32>, stats_rx: tokio::sync::mpsc::Receiver<StatsMsg>) -> anyhow::Result<()>;
+}
+
+pub struct RouterHandler{
+
+}
+
+pub enum RouteMsg{
+    AddRoute{
+        prefix_len: u8,
+        prefix: u32,
+        next_hop: RouteNextHop,
+    }
+}
+
+#[async_trait]
+impl ProgramHandler for RouterHandler{
+    async fn handle(&self, mut bpf: Bpf, interface_map: HashMap<String, u32>, stats_rx: tokio::sync::mpsc::Receiver<StatsMsg>) -> anyhow::Result<()>{
+        info!("router handler started");  
+        let mut join_handlers = Vec::new();
+        
+
+        
+        let route_table = if let Some(route_table) = bpf.take_map("ROUTETABLE"){
+            let route_table_map: LpmTrie<MapData, u32, RouteNextHop> = LpmTrie::try_from(route_table).unwrap();
+            route_table_map
+        } else {
+            panic!("ROUTETABLE map not found");
+        };
+
+        let mut router_s = router::Router::new();
+        let router_jh = tokio::spawn(async move {
+            if let Err(e) = router_s.run(route_table).await{
+                return Err(e);
+            }
+            Ok(())
+        });
+
+        join_handlers.push(router_jh);
+
+        let stats_handler_jh: JoinHandle<Result<(), anyhow::Error>> = tokio::spawn(async move {
+            stats_handler(bpf, interface_map, stats_rx).await.map_err(|e| anyhow::anyhow!("stats handler failed: {}", e))?;
+            Ok(())
+        });
+        join_handlers.push(stats_handler_jh);
+        futures::future::join_all(join_handlers).await;
+
+        Ok(())
+    }
 }
 
 pub struct AccelHandler{

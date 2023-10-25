@@ -1,6 +1,5 @@
 #![no_std]
-
-use core::mem::{self, zeroed, size_of};
+use core::{mem::{self, zeroed, size_of}, hash::Hash, borrow::Borrow};
 use aya_bpf::{
     programs::XdpContext,
     helpers::{bpf_csum_diff, bpf_fib_lookup},
@@ -63,6 +62,19 @@ pub struct FlowKey {
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for FlowKey {}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RouteNextHop {
+    pub ip: u32,
+    pub ifidx: u32,
+    pub src_mac: [u8;6],
+    pub dst_mac: [u8;6],
+}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for RouteNextHop {}
+
 
 #[inline(always)]
 pub fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {

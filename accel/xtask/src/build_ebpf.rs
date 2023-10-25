@@ -44,6 +44,7 @@ pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
     let program_list = vec![
         "accel-ebpf",
         "udp-server-ebpf",
+        "router-ebpf"
     ];
 
     for program in program_list{

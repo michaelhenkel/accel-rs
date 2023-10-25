@@ -64,7 +64,7 @@ impl UdpServer{
                         Ok(n) => {
                             if n > 0 {
                                 while let Some(_v) = rx_socket.v.pop_front(){
-                                    info!("received packet");
+                                    //info!("received packet");
                                 }
                                 rx_socket.fq_deficit += n;
                             }

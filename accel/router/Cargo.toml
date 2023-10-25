@@ -1,0 +1,25 @@
+[package]
+name = "router"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aya-bpf = { git = "https://github.com/aya-rs/aya" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
+common = { path = "../../common" }
+network-types = "0.0.4"
+socket = { path = "../../socket" }
+libbpf-sys = "0.7.0"
+afxdp = { git = "https://github.com/michaelhenkel/afxdp-rs"}
+arraydeque = "0.4"
+anyhow = "1"
+log = "0.4"
+aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
+tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+futures = "0.3.28"
+rtnetlink = "0.13.1"
+netlink-packet-route = { version = "0.17.1", features = ["rich_nlas"] }
+pnet = "0.34.0"
+
+
+
