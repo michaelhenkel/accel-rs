@@ -18,10 +18,6 @@ use common::{
     FlowKey, FlowNextHop,
 };
 
-#[map(name = "FLOWTABLE")]
-static mut FLOWTABLE: HashMap<FlowKey, FlowNextHop> =
-    HashMap::<FlowKey, FlowNextHop>::with_max_entries(2048, 0);
-
 #[map(name = "STATSMAP")]
 static mut STATSMAP: HashMap<u32, Stats> =
     HashMap::<u32, Stats>::with_max_entries(128, 0);

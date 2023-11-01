@@ -60,6 +60,7 @@ pub struct NextHop {
     pub local_if_idx: u32,
     pub local_mac: [u8; 6],
     pub neigh_mac: [u8; 6],
+    pub total_next_hops: u32,
 }
 
 impl Into<RouteNextHop> for NextHop{
@@ -69,6 +70,7 @@ impl Into<RouteNextHop> for NextHop{
             ifidx: self.local_if_idx,
             src_mac: self.local_mac,
             dst_mac: self.neigh_mac,
+            total_next_hops: self.total_next_hops
         }
     }
 }
@@ -95,7 +97,7 @@ impl Router{
             }
         }
     }
-    pub async fn run(&mut self, mut route_table: LpmTrie<MapData, u32, RouteNextHop>) -> anyhow::Result<()>{
+    pub async fn run(&mut self, mut route_table: LpmTrie<MapData, u32, [RouteNextHop;32]>) -> anyhow::Result<()>{
         info!("running router");
         let (connection, handle, _) = new_connection().unwrap();
         tokio::spawn(connection);
@@ -105,14 +107,31 @@ impl Router{
         }
         for (prefix_len, routes) in &self.route_table.routes{
             for (prefix, next_hop_list) in routes{
+                let mut route_next_hop_list = [RouteNextHop::default(); 32];
+                let mut i = 0;
                 for next_hop in next_hop_list{
-                    let route_next_hop: RouteNextHop = next_hop.clone().into();
-                    let key = Key::new(*prefix_len as u32, *prefix);
-                    route_table
-                        .insert(&key, route_next_hop, 0)?;
+                    route_next_hop_list[i] = next_hop.clone().into();
+                    route_next_hop_list[i].total_next_hops = next_hop_list.len() as u32;
+                    i += 1;
                 }
+                let key = Key::new(*prefix_len as u32, *prefix);
+                info!("inserting key data: {:?}, key prefix_len {}", key.data(), key.prefix_len());
+                route_table
+                    .insert(&key, route_next_hop_list, 0)?;
             }
         }
+        //u32::from(ipaddr).to_be()
+        let p_len = 32;
+        let prefix = u32::from(Ipv4Addr::new(17, 0, 0, 10)).to_be();
+        info!("getting next hop for prefix {}/{}", Ipv4Addr::from(prefix), p_len);
+        let key = Key::new(p_len, prefix);
+        info!("getting key data: {:?}, key prefix_len {}", key.data(), key.prefix_len());
+        if let Ok(res) = route_table.get(&key, 0){
+            for x in res {
+                info!("{:?}", x);
+            }
+        }
+        info!("done getting routes");
         info!("");
         info!("{}", self.route_table);
         Ok(())
@@ -156,7 +175,7 @@ impl Router{
                 if next_hop_list.len() > 0 {
                     let dst_prefix = if let IpAddr::V4(ipv4_addr) = dst_prefix {
                         let dst_prefix: Ipv4Addr = *ipv4_addr;
-                        u32::from_be_bytes(dst_prefix.octets())
+                        u32::from(dst_prefix).to_be()
                     } else {
                         panic!("IPv6 not supported");
                     };
@@ -208,7 +227,7 @@ async fn get_next_hop(handle: Handle, gateway_ip: &IpAddr, intf_idx: u32) -> any
     };
 
     let nh = NextHop{
-        ip: u32::from_be_bytes(gateway_ip.octets()),
+        ip: u32::from(gateway_ip).to_be(),
         local_if_idx: intf_idx,
         local_mac: if let Ok(local_mac) = local_mac.clone().try_into(){
             local_mac
@@ -220,6 +239,7 @@ async fn get_next_hop(handle: Handle, gateway_ip: &IpAddr, intf_idx: u32) -> any
         } else {
             panic!("neighbour mac is not 6 bytes");
         },
+        total_next_hops: 0,
     };
 
     Ok(Some(nh))

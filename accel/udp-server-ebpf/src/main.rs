@@ -1,11 +1,13 @@
 #![no_std]
 #![no_main]
 
+use core::mem::zeroed;
+
 use aya_bpf::{
     bindings::xdp_action,
     macros::{xdp, map},
     programs::XdpContext,
-    maps::{HashMap, XskMap},
+    maps::{HashMap, XskMap, LpmTrie},
 };
 use aya_log_ebpf::{info, warn};
 use network_types::{
@@ -15,14 +17,9 @@ use network_types::{
 };
 use common::{
     ptr_at, Stats,
-    FlowKey, FlowNextHop,
+    FlowKey, FlowNextHop, RouteNextHop,
     //STATS_MAP_NAME, FLOW_TABLE_NAME,
 };
-
-
-#[map(name = "FLOWTABLE")]
-static mut FLOWTABLE: HashMap<FlowKey, FlowNextHop> =
-    HashMap::<FlowKey, FlowNextHop>::with_max_entries(2048, 0);
 
 #[map(name = "STATSMAP")]
 static mut STATSMAP: HashMap<u32, Stats> =
@@ -72,6 +69,4 @@ fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
-
-
 

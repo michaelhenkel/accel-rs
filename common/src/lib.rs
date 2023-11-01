@@ -4,14 +4,15 @@ use aya_bpf::{
     programs::XdpContext,
     helpers::{bpf_csum_diff, bpf_fib_lookup},
     bindings::bpf_fib_lookup as fib_lookup, cty::c_void,
-    maps::HashMap,
+    macros::map,
+    maps::{HashMap, lpm_trie::Key}, maps::{Array, LpmTrie},
 };
 use network_types::{
     eth::EthHdr,
     ip::Ipv4Hdr,
     udp::UdpHdr,
 };
-use aya_log_ebpf::warn;
+use aya_log_ebpf::{warn, info};
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
@@ -45,6 +46,9 @@ pub struct FlowNextHop {
     pub src_ip: u32,
     pub dst_ip: u32,
     pub ifidx: u32,
+    pub flowlet_size: u32,
+    pub counter: u32,
+    pub current_link: u32
 }
 
 #[cfg(feature = "user")]
@@ -63,13 +67,15 @@ pub struct FlowKey {
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for FlowKey {}
 
+
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct RouteNextHop {
     pub ip: u32,
     pub ifidx: u32,
     pub src_mac: [u8;6],
     pub dst_mac: [u8;6],
+    pub total_next_hops: u32,
 }
 
 #[cfg(feature = "user")]
@@ -105,7 +111,7 @@ pub struct Stats {
 unsafe impl aya::Pod for Stats {}
 
 #[inline(always)]
-fn _mac_to_int(mac: [u8;6]) -> u64 {
+pub fn mac_to_int(mac: [u8;6]) -> u64 {
     let mut mac_dec: u64 = 0;
     for i in 0..6 {
         mac_dec = mac_dec << 8;
@@ -131,29 +137,10 @@ fn _csum_fold_helper(csum: i64) -> u16 {
     !sum as u16
 }
 
-#[inline(always)]
-fn _get_v4_next_hop_from_flow_table(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
-    let ipv4_hdr_ptr = ptr_at::<Ipv4Hdr>(&ctx, EthHdr::LEN)?;
-    let udp_hdr_ptr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
-    let mut flow_key: FlowKey = unsafe { zeroed() };
-    flow_key.dst_ip = unsafe { (*ipv4_hdr_ptr).dst_addr };
-    flow_key.src_ip = unsafe { (*ipv4_hdr_ptr).src_addr };
-    flow_key.dst_port = unsafe { (*udp_hdr_ptr).dest };
-    flow_key.src_port = unsafe { (*udp_hdr_ptr).source };
-    flow_key.ip_proto = unsafe { (*ipv4_hdr_ptr).proto as u8 };
-    match unsafe { flow_table.get(&flow_key) } {
-        Some(fnh) => {
-            return Some(fnh.clone())
-        }
-        None => {
-            warn!(ctx, "flow_next_hop not found");
-            return None;
-        }
-    }
-}
+
 
 #[inline(always)]
-fn _get_next_hop(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
+pub fn get_next_hop(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) -> Option<FlowNextHop>{
     let ip_hdr_ptr = ptr_at_mut::<Ipv4Hdr>(&ctx, EthHdr::LEN)?;
     let udp_hdr_ptr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
     let dst_ip = unsafe { (*ip_hdr_ptr).dst_addr };
@@ -178,6 +165,9 @@ fn _get_next_hop(ctx: &XdpContext, flow_table: HashMap<FlowKey, FlowNextHop>) ->
         dst_mac: params.dmac,
         src_mac: params.smac,
         ifidx: params.ifindex,
+        counter: 0,
+        flowlet_size: 0,
+        current_link: 0,
     };
 
     let mut flow_key: FlowKey = unsafe { zeroed() };

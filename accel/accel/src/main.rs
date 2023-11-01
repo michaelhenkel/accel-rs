@@ -1,6 +1,8 @@
 use aya::maps::MapData;
 use aya::programs::{Xdp, XdpFlags};
-use aya::{include_bytes_aligned, Bpf, maps::{HashMap as AyaHashMap, XskMap, lpm_trie::{LpmTrie, Key}}};
+use aya::{include_bytes_aligned, Bpf, 
+    maps::{HashMap as AyaHashMap, XskMap, lpm_trie::LpmTrie, Array
+}};
 use aya_log::BpfLogger;
 use clap::{Parser, Subcommand};
 use log::{info, warn, debug};
@@ -26,6 +28,9 @@ use async_trait::async_trait;
 struct Opt {
     #[clap(short, long)]
     programs: Vec<Program>,
+    #[clap(short, long)]
+    flowlet_size: Option<u32>,
+
 }
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
@@ -142,7 +147,12 @@ async fn main() -> Result<(), anyhow::Error> {
                         Box::new(AccelHandler{})
                     },
                     ProgramName::Router => {
-                        Box::new(RouterHandler{})
+                        let flowlet_size = if let Some(flowlet_size) = opt.flowlet_size{
+                            flowlet_size
+                        } else {
+                            0
+                        };
+                        Box::new(RouterHandler{flowlet_size})
                     }
                 };
                 
@@ -193,7 +203,7 @@ trait ProgramHandler: Send + Sync{
 }
 
 pub struct RouterHandler{
-
+    flowlet_size: u32,
 }
 
 pub enum RouteMsg{
@@ -210,13 +220,18 @@ impl ProgramHandler for RouterHandler{
         info!("router handler started");  
         let mut join_handlers = Vec::new();
         
-
-        
         let route_table = if let Some(route_table) = bpf.take_map("ROUTETABLE"){
-            let route_table_map: LpmTrie<MapData, u32, RouteNextHop> = LpmTrie::try_from(route_table).unwrap();
+            let route_table_map: LpmTrie<MapData, u32, [RouteNextHop;32]> = LpmTrie::try_from(route_table).unwrap();
             route_table_map
         } else {
             panic!("ROUTETABLE map not found");
+        };
+
+        if let Some(flowlet_size_map) = bpf.map_mut("FLOWLETSIZE"){
+            let mut flowlet_size_map: AyaHashMap<_, u8, u32> = AyaHashMap::try_from(flowlet_size_map).unwrap();
+            flowlet_size_map.insert(0, self.flowlet_size, 0)?;
+        } else {
+            panic!("FLOWLETSIZE map not found");
         };
 
         let mut router_s = router::Router::new();
