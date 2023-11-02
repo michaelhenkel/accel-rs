@@ -69,9 +69,9 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     
 
     let flow_next_hop = if let Some((flow_next_hop, flow_key)) = get_v4_next_hop_from_flow_table(&ctx){
-        info!(&ctx, "flow_next_hop_counter: {}, flowlet_size {}", flow_next_hop.counter, flow_next_hop.flowlet_size);
-        if flow_next_hop.counter % (flow_next_hop.flowlet_size + 1) == 0{
-            info!(&ctx, "flowlet_size reached, getting new link");
+        //info!(&ctx, "flow_next_hop_counter: {}, flowlet_size {}", flow_next_hop.counter, flow_next_hop.flowlet_size);
+        if flow_next_hop.flowlet_size > 0 && flow_next_hop.counter % (flow_next_hop.flowlet_size + 1) == 0 {
+            //info!(&ctx, "flowlet_size reached, getting new link");
             let packet_count = flow_next_hop.counter;
             let current_link = flow_next_hop.current_link;
             delete_flow(&ctx, flow_key);
@@ -84,35 +84,23 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             flow_next_hop
         }
     } else {
-        
         if let Some(flow_next_hop) = get_next_hop_from_route_table(&ctx, 0, 0){
             flow_next_hop
         } else {
             return Ok(xdp_action::XDP_PASS);
         }
-        
-        //return Ok(xdp_action::XDP_PASS);
     };
-
-    
 
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
-
     let res = unsafe { bpf_redirect(if_idx, 0)};
-
-    //let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
-    //let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
-    info!(
-        &ctx,
-        "redirecting UDP packet to interface idx {}",
-        if_idx
-    );
+    let src_mac = common::mac_to_int(unsafe { (*eth_hdr).src_addr });
+    let dst_mac = common::mac_to_int(unsafe { (*eth_hdr).dst_addr });
+    let src_ip = u32::from_be(unsafe { (*ipv4_hdr).src_addr });
+    let dst_ip = u32::from_be(unsafe { (*ipv4_hdr).dst_addr });
+    info!(&ctx,"redirecting packet src_mac {:x} dst_mac {:x} src_ip {:i} dst_ip {:i} to interface idx {}",src_mac, dst_mac, src_ip, dst_ip, if_idx);
     Ok(res as u32)
-
-    
-    //Ok(xdp_action::XDP_PASS)
 }
 
 #[panic_handler]
@@ -149,7 +137,6 @@ pub fn get_v4_next_hop_from_flow_table(ctx: &XdpContext) -> Option<(FlowNextHop,
     flow_key.ip_proto = unsafe { (*ipv4_hdr_ptr).proto as u8 };
     match unsafe { FLOWTABLE.get_ptr_mut(&flow_key) } {
         Some(fnh) => {
-            info!(ctx, "flow_next_hop found");
             unsafe { (*fnh).counter += 1 };
             return Some((unsafe { *fnh }, flow_key.clone()))
         }
@@ -172,46 +159,59 @@ pub fn get_next_hop_from_route_table(ctx: &XdpContext, mut packet_count: u32, mu
     } else {
         0
     };
-    info!(ctx, "flowlet_size: {}", flowlet_size);
 
     let key: Key<u32> = Key::new(32,dst_ip);
-    let route_nh = if let Some(next_hop_list) = unsafe { ROUTETABLE.get(&key) } {
-        info!(ctx, "next hop list found");
+    if let Some(next_hop_list) = unsafe { ROUTETABLE.get(&key) } {
         let mut total_next_hops = 0;
-        
         for i in 0..32{
             let nh = next_hop_list[i];
-            
-            info!(ctx, "next hop found");
-            info!(ctx, "nh_ip: {:i}, nh_if: {}, nh_src_mac: {:x}, nh_dst_mac: {:x}", nh.ip, nh.ifidx, common::mac_to_int(nh.src_mac), common::mac_to_int(nh.dst_mac));
-            
             let idx = (i + 1) as u32;
-             
             if nh.total_next_hops == idx{
                 total_next_hops = idx;
                 break;
             }
-            
         }
         
         if total_next_hops == 0 {
             info!(ctx, "no next hop found");
             return None;
         }
-        
-        info!(ctx, "link_index: {}, flowlet_size: {}, packet_count: {}, total_next_hops: {}", current_link, flowlet_size, packet_count, total_next_hops);
 
-        if current_link < 32 {
-            current_link = (current_link + 1) % total_next_hops;
+        if current_link == 0 {
+            current_link = 1;
+        }else if current_link == total_next_hops{
+            current_link = 1;
+        } else {
+            current_link += 1;
         }
- 
-        info!(ctx, "link_index: {}, flowlet_size: {}, packet_count: {}, total_next_hops: {}", current_link, flowlet_size, packet_count, total_next_hops);
-        packet_count += 1;
-        if current_link < 32 {
-            next_hop_list[current_link as usize]
+        
+        let rnh = if (current_link - 1) < next_hop_list.len() as u32 {
+            next_hop_list[(current_link-1) as usize]
         } else {
             next_hop_list[0]
+        };
+
+        let flow_next_hop = FlowNextHop{
+            dst_ip,
+            src_ip,
+            dst_mac: rnh.dst_mac,
+            src_mac: rnh.src_mac,
+            ifidx: rnh.ifidx,
+            counter: { packet_count += 1; packet_count},
+            current_link,
+            flowlet_size,
+        };
+    
+        let mut flow_key: FlowKey = unsafe { zeroed() };
+        flow_key.dst_ip = dst_ip;
+        flow_key.src_ip = src_ip;
+        flow_key.dst_port = unsafe { (*udp_hdr_ptr).dest };
+        flow_key.src_port = unsafe { (*udp_hdr_ptr).source };
+        flow_key.ip_proto = unsafe { (*ip_hdr_ptr).proto as u8 };
+        if let Err(_e) = unsafe { FLOWTABLE.insert(&flow_key, &flow_next_hop, 0) }{
+            return None;
         }
+        return Some(flow_next_hop)
 
 
     } else {
@@ -221,28 +221,7 @@ pub fn get_next_hop_from_route_table(ctx: &XdpContext, mut packet_count: u32, mu
 
 
  
-    let flow_next_hop = FlowNextHop{
-        dst_ip,
-        src_ip,
-        dst_mac: route_nh.dst_mac,
-        src_mac: route_nh.src_mac,
-        ifidx: route_nh.ifidx,
-        counter: { packet_count += 1; packet_count},
-        current_link,
-        flowlet_size,
-    };
 
-
-    let mut flow_key: FlowKey = unsafe { zeroed() };
-    flow_key.dst_ip = dst_ip;
-    flow_key.src_ip = src_ip;
-    flow_key.dst_port = unsafe { (*udp_hdr_ptr).dest };
-    flow_key.src_port = unsafe { (*udp_hdr_ptr).source };
-    flow_key.ip_proto = unsafe { (*ip_hdr_ptr).proto as u8 };
-    if let Err(_e) = unsafe { FLOWTABLE.insert(&flow_key, &flow_next_hop, 0) }{
-        return None;
-    }
-    Some(flow_next_hop)
 }
 
 

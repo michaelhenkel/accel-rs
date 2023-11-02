@@ -115,25 +115,25 @@ impl Router{
                     i += 1;
                 }
                 let key = Key::new(*prefix_len as u32, *prefix);
-                info!("inserting key data: {:?}, key prefix_len {}", key.data(), key.prefix_len());
                 route_table
                     .insert(&key, route_next_hop_list, 0)?;
             }
         }
-        //u32::from(ipaddr).to_be()
-        let p_len = 32;
-        let prefix = u32::from(Ipv4Addr::new(17, 0, 0, 10)).to_be();
-        info!("getting next hop for prefix {}/{}", Ipv4Addr::from(prefix), p_len);
-        let key = Key::new(p_len, prefix);
-        info!("getting key data: {:?}, key prefix_len {}", key.data(), key.prefix_len());
-        if let Ok(res) = route_table.get(&key, 0){
-            for x in res {
-                info!("{:?}", x);
-            }
-        }
-        info!("done getting routes");
-        info!("");
-        info!("{}", self.route_table);
+                //u32::from(ipaddr).to_be()
+                let p_len = 32;
+                let prefix = u32::from(Ipv4Addr::new(17, 0, 0, 10)).to_be();
+                info!("getting next hop for prefix {}/{}", Ipv4Addr::from(prefix), p_len);
+                let key = Key::new(p_len, prefix);
+                info!("getting key data: {:?}, key prefix_len {}", key.data(), key.prefix_len());
+                if let Ok(res) = route_table.get(&key, 0){
+                    for x in res {
+                        info!("{:?}", x);
+                    }
+                }
+                info!("done getting routes");
+                info!("");
+                info!("{}", self.route_table);
+        
         Ok(())
     }
     async fn get_routes(&mut self,handle: Handle, ip_version: IpVersion) -> anyhow::Result<(), Error> {
@@ -141,34 +141,36 @@ impl Router{
         while let Some(route_msg) = routes.try_next().await? {
             if let Some((dst_prefix, dst_prefix_len)) = &route_msg.destination_prefix(){
                 let mut next_hop_list = Vec::new();
-                if let Some(gateway_ip) = &route_msg.gateway(){
-                    if let Some(intf_idx) = &route_msg.output_interface(){
-                        
-                        if let Ok(next_hop) = get_next_hop(handle.clone(), gateway_ip, *intf_idx).await{
-                            if let Some(next_hop) = next_hop{
-                                next_hop_list.push(next_hop);
+                info!("route_msg {:?}", route_msg);
+                if route_msg.header.protocol == 3 {
+                    if let Some(gateway_ip) = &route_msg.gateway(){
+                        if let Some(intf_idx) = &route_msg.output_interface(){
+                            if let Ok(next_hop) = get_next_hop(handle.clone(), gateway_ip, *intf_idx).await{
+                                if let Some(next_hop) = next_hop{
+                                    next_hop_list.push(next_hop);
+                                }
+                            } else {
+                                panic!("next hop not found");
                             }
                         } else {
-                            panic!("next hop not found");
+                            panic!("output interface not found");
                         }
                     } else {
-                        panic!("output interface not found");
-                    }
-                } else {
-                    for nla in &route_msg.nlas{
-                        match nla {
-                            route_nlas::Nla::MultiPath(nh_list) => {
-                                for nh in nh_list{
-                                    if let Some(gateway_ip) = &nh.gateway(){
-                                        if let Ok(next_hop) = get_next_hop(handle.clone(), gateway_ip, nh.interface_id).await{
-                                            if let Some(next_hop) = next_hop{
-                                                next_hop_list.push(next_hop);
+                        for nla in &route_msg.nlas{
+                            match nla {
+                                route_nlas::Nla::MultiPath(nh_list) => {
+                                    for nh in nh_list{
+                                        if let Some(gateway_ip) = &nh.gateway(){
+                                            if let Ok(next_hop) = get_next_hop(handle.clone(), gateway_ip, nh.interface_id).await{
+                                                if let Some(next_hop) = next_hop{
+                                                    next_hop_list.push(next_hop);
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                 }
