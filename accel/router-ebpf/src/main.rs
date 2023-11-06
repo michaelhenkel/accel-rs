@@ -38,7 +38,7 @@ static mut ROUTETABLE: LpmTrie<u32, [RouteNextHop;32]> =
     LpmTrie::<u32, [RouteNextHop;32]>::with_max_entries(2048, 0);
 
 #[map(name = "XSKMAP")]
-static XSKMAP: XskMap = XskMap::with_max_entries(8, 0);
+static XSKMAP: XskMap = XskMap::with_max_entries(2048, 0);
 
 #[xdp]
 pub fn router(ctx: XdpContext) -> u32 {
@@ -78,7 +78,14 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             if let Some(flow_next_hop) = get_next_hop_from_route_table(&ctx, packet_count, current_link){
                 flow_next_hop
             } else {
+                info!(&ctx, "no flow info found, pass");
                 return Ok(xdp_action::XDP_PASS);
+                /*
+                info!(&ctx,"redirecting packet to socket");
+                let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+                return XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
+                */
+                //return Ok(xdp_action::XDP_PASS);
             }
         } else {
             flow_next_hop
@@ -87,7 +94,25 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         if let Some(flow_next_hop) = get_next_hop_from_route_table(&ctx, 0, 0){
             flow_next_hop
         } else {
+            info!(&ctx, "no flow info found, pass");
             return Ok(xdp_action::XDP_PASS);
+            /* 
+            info!(&ctx,"redirecting packet to socket");
+            let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+            let res = XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
+            match res {
+                Ok(ret) => {
+                    info!(&ctx, "redirected packet to socket");
+                    return Ok(ret);
+                },
+                Err(e) => { 
+                    info!(&ctx, "redirect failed: {}, queue_idx {}", e, queue_idx); 
+                    return Ok(e)
+                }
+            }
+            */
+            //return XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
+            //return Ok(xdp_action::XDP_PASS);
         }
     };
 
@@ -95,11 +120,13 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
     let res = unsafe { bpf_redirect(if_idx, 0)};
+    /*
     let src_mac = common::mac_to_int(unsafe { (*eth_hdr).src_addr });
     let dst_mac = common::mac_to_int(unsafe { (*eth_hdr).dst_addr });
     let src_ip = u32::from_be(unsafe { (*ipv4_hdr).src_addr });
     let dst_ip = u32::from_be(unsafe { (*ipv4_hdr).dst_addr });
     info!(&ctx,"redirecting packet src_mac {:x} dst_mac {:x} src_ip {:i} dst_ip {:i} to interface idx {}",src_mac, dst_mac, src_ip, dst_ip, if_idx);
+    */
     Ok(res as u32)
 }
 

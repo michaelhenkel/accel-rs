@@ -30,7 +30,8 @@ struct Opt {
     programs: Vec<Program>,
     #[clap(short, long)]
     flowlet_size: Option<u32>,
-
+    #[clap(short, long)]
+    endpoints: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
@@ -152,7 +153,10 @@ async fn main() -> Result<(), anyhow::Error> {
                         } else {
                             0
                         };
-                        Box::new(RouterHandler{flowlet_size})
+                        Box::new(RouterHandler{
+                            flowlet_size,
+                            endpoints: opt.endpoints.clone()
+                        })
                     }
                 };
                 
@@ -204,6 +208,7 @@ trait ProgramHandler: Send + Sync{
 
 pub struct RouterHandler{
     flowlet_size: u32,
+    endpoints: Option<Vec<String>>,
 }
 
 pub enum RouteMsg{
@@ -234,9 +239,15 @@ impl ProgramHandler for RouterHandler{
             panic!("FLOWLETSIZE map not found");
         };
 
-        let mut router_s = router::Router::new();
+        let xsk_map = if let Some(xsk_map) = bpf.take_map("XSKMAP") {
+            XskMap::try_from(xsk_map)?   
+        } else {
+            panic!("XSKMAP map not found");
+        };
+
+        let mut router_s = router::Router::new(false, interface_map.clone(), self.endpoints.clone());
         let router_jh = tokio::spawn(async move {
-            if let Err(e) = router_s.run(route_table).await{
+            if let Err(e) = router_s.run(route_table, xsk_map).await{
                 return Err(e);
             }
             Ok(())
