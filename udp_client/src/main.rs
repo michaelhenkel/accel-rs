@@ -46,6 +46,8 @@ struct Opt {
     start: Option<u32>,
     #[clap(long, default_value = "512")]
     packet_size: usize,
+    #[clap(long, default_value = "false")]
+    xctrl: bool,
 }
 
 fn read_yaml_file(file_path: &str) -> Result<Vec<Message>, anyhow::Error> {
@@ -216,11 +218,15 @@ async fn main() -> anyhow::Result<()>{
     ctrl_sock.connect(remote_ctrl_addr).await?;
     data_sock.connect(remote_data_addr).await?;
     if opt.messages.is_some() && opt.packets.is_some() && opt.qpid.is_some() && opt.start.is_some(){
-        send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 0).await?;
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        if opt.xctrl{
+            send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 0).await?;
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
         send_messages(&data_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size).await?;
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-        send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 1).await?;
+        if opt.xctrl{
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 1).await?;
+        }
 
         return Ok(());
     }

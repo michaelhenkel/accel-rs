@@ -1,22 +1,95 @@
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatsRequest {
-    #[prost(string, tag = "1")]
-    pub program: ::prost::alloc::string::String,
+    #[prost(enumeration = "ProgramType", tag = "1")]
+    pub program_type: i32,
     #[prost(string, tag = "2")]
     pub interface: ::prost::alloc::string::String,
+    #[prost(enumeration = "StatsType", tag = "3")]
+    pub stats_type: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatsReply {
-    #[prost(message, optional, tag = "1")]
-    pub interface_stats: ::core::option::Option<InterfaceStats>,
+    #[prost(oneof = "stats_reply::Stats", tags = "1, 2")]
+    pub stats: ::core::option::Option<stats_reply::Stats>,
+}
+/// Nested message and enum types in `StatsReply`.
+pub mod stats_reply {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Stats {
+        #[prost(message, tag = "1")]
+        UdpServerStats(super::UdpServerStats),
+        #[prost(message, tag = "2")]
+        InterfaceStats(super::InterfaceStats),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InterfaceStats {
     #[prost(int32, tag = "1")]
     pub rx: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UdpServerStats {
+    #[prost(int32, tag = "1")]
+    pub rx: i32,
+    #[prost(int32, tag = "2")]
+    pub out_of_order: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProgramType {
+    UdpServer = 0,
+    Router = 1,
+}
+impl ProgramType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            ProgramType::UdpServer => "UDP_SERVER",
+            ProgramType::Router => "ROUTER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "UDP_SERVER" => Some(Self::UdpServer),
+            "ROUTER" => Some(Self::Router),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StatsType {
+    Interface = 0,
+    Program = 1,
+}
+impl StatsType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            StatsType::Interface => "Interface",
+            StatsType::Program => "Program",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Interface" => Some(Self::Interface),
+            "Program" => Some(Self::Program),
+            _ => None,
+        }
+    }
 }
 /// Generated client implementations.
 pub mod stats_client {

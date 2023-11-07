@@ -43,7 +43,7 @@ pub enum SocketRxTx{
 }
 
 impl <'a>Socket<'a>{
-    pub fn new(area: Arc<MmapArea<'a, BufCustom>>, bufs: &mut Vec<BufMmap<'a, BufCustom>>, socket_type: SocketRxTx, intf: String, buf_num: usize, zero_copy: bool) -> Socket<'a> {
+    pub fn new(area: Arc<MmapArea<'a, BufCustom>>, bufs: &mut Vec<BufMmap<'a, BufCustom>>, socket_type: SocketRxTx, intf: String, buf_num: usize, zero_copy: bool, queue: usize) -> Socket<'a> {
         let intf = intf.as_str();
         let umem = Umem::new(
             area.clone(),
@@ -63,7 +63,7 @@ impl <'a>Socket<'a>{
                 let socket: Result<(Arc<AfXdpSocket<'_, BufCustom>>, SocketRx<'_, BufCustom>), SocketNewError> = AfXdpSocket::new_rx(
                     umem1.clone(),
                     intf,
-                    0,
+                    queue,
                     COMPLETION_RING_SIZE,
                     options,
                     1
@@ -78,7 +78,7 @@ impl <'a>Socket<'a>{
                 let socket = AfXdpSocket::new_tx(
                     umem1.clone(),
                     intf,
-                    0,
+                    queue,
                     FILL_RING_SIZE,
                     //4096,
                     options,

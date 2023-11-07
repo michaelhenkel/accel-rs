@@ -1938,6 +1938,7 @@ dependencies = [
  "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
  "aya-bpf",
  "aya-log-ebpf",
+ "cli_server",
  "common",
  "futures",
  "libbpf-sys",

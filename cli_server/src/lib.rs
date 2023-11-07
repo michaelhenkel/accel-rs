@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
+
 use log::info;
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod cli_server;
 
-use cli_server::cli_server::{StatsReply, StatsRequest, InterfaceStats};
+use cli_server::cli_server::{StatsReply, StatsRequest, InterfaceStats, ProgramType, StatsType, stats_reply, UdpServerStats};
 use cli_server::cli_server::stats_server::{Stats, StatsServer};
 
 pub struct CliServer{
@@ -24,20 +25,39 @@ impl CliServer{
 impl Stats for CliServer{
     async fn get(&self, request: Request<StatsRequest>) -> Result<Response<StatsReply>, Status> {
         let req = request.into_inner();
+        let p = match req.program_type{
+            0 => {
+                ProgramType::UdpServer
+            },
+            1 => {
+                ProgramType::Router
+            },
+            _ => {
+                return Err(Status::internal(format!("Invalid program number")));
+            },
+        };
         let (tx, rx) = tokio::sync::oneshot::channel();
         let stats_msg = StatsMsg{
             iface: req.interface.clone(),
-            program: req.program.clone(),
+            program: p,
             tx,
+            stats_type: req.stats_type(),
         };
-        if let Some(tx) = self.program_tx_map.get(&req.program){
+
+        let program_name = match p {
+            ProgramType::UdpServer => "udp_server".to_string(),
+            ProgramType::Router => "router".to_string(),
+        };
+        
+
+        if let Some(tx) = self.program_tx_map.get(&program_name){
             if let Err(e) = tx.send(stats_msg).await{
                 return Err(Status::internal(format!("Failed to send stats request: {}", e)));
             }
         } else {
-            return Err(Status::internal(format!("Interface {} not found", req.program)));
+            return Err(Status::internal(format!("program {} not found", program_name)));
         }
-        let interface_stats = match rx.await {
+        let stats_reply = match rx.await {
             Ok(stats_reply) => {
                 stats_reply
             },
@@ -45,17 +65,25 @@ impl Stats for CliServer{
                 return Err(Status::internal(format!("Failed to receive stats reply: {}", e)));
             }
         };
+
+        match &stats_reply {
+            stats_reply::Stats::UdpServerStats(stats) => {
+
+            },
+            stats_reply::Stats::InterfaceStats(stats) => {
+
+            },
+        }
+
         let reply = StatsReply{
-            interface_stats: Some(interface_stats),
+            stats: Some(stats_reply),
         };
         Ok(Response::new(reply))
     }
     async fn reset(&self, _request: Request<StatsRequest>) -> Result<Response<StatsReply>, Status> {
         //let req = request.into_inner();
         let reply = StatsReply{
-            interface_stats: Some(InterfaceStats{
-                rx: 0,
-            }),
+            stats: None,
         };
         Ok(Response::new(reply))
     }
@@ -74,6 +102,7 @@ pub async fn run(intf_tx_map: HashMap<String, tokio::sync::mpsc::Sender<StatsMsg
 
 pub struct StatsMsg {
     pub iface: String,
-    pub program: String,
-    pub tx: tokio::sync::oneshot::Sender<InterfaceStats>
+    pub program: ProgramType,
+    pub stats_type: StatsType,
+    pub tx: tokio::sync::oneshot::Sender<stats_reply::Stats>
 }

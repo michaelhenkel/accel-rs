@@ -17,6 +17,7 @@ log = "0.4"
 aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
 tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
 futures = "0.3.28"
+cli_server = { path = "../../cli_server" }
 
 
 

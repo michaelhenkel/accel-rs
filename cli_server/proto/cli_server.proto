@@ -7,14 +7,34 @@ service Stats {
 }
 
 message StatsRequest {
-    string program = 1;
+    ProgramType programType = 1;
     string interface = 2;
+    StatsType statsType = 3;
 }
 
 message StatsReply {
-    InterfaceStats interfaceStats = 1;
+    oneof stats {
+        UdpServerStats udpServerStats = 1;
+        InterfaceStats interfaceStats = 2;
+    }
 }
 
 message InterfaceStats{
     int32 rx = 1;
 }
+
+message UdpServerStats{
+    int32 rx = 1;
+    int32 outOfOrder = 2;
+}
+
+enum ProgramType {
+    UDP_SERVER = 0;
+    ROUTER = 1;
+}
+
+enum StatsType {
+    Interface = 0;
+    Program = 1;
+}
+

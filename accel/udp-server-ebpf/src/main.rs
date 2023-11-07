@@ -55,14 +55,19 @@ fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
     }
     let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
     let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
-    info!(
-        &ctx,
-        "received UDP packet on interface idx {} queue {}",
-        if_idx, queue_idx
-    );
     let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
     unsafe { (*statsmap).rx += 1 };
-    XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64)
+    match XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64){
+        Ok(res) => {
+            Ok(res)
+        },
+        Err(e) => {
+            info!(&ctx, "error redirecting to queue {}: {}", queue_idx, e);
+            return Ok(xdp_action::XDP_ABORTED);
+        }
+    }
+
+    
 }
 
 #[panic_handler]
