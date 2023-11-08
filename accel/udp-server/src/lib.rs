@@ -1,6 +1,6 @@
-use std::{collections::{HashMap, HashSet}, sync::{Mutex, Arc}};
-use aya::maps::{XskMap, MapData, HashMap as AyaHashMap};
-use common::{BthHdr, Stats};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
+use aya::maps::{XskMap, MapData};
+use common::BthHdr;
 use network_types::{eth::EthHdr, ip::Ipv4Hdr, udp::UdpHdr};
 use socket::{
     Socket,
@@ -9,8 +9,11 @@ use socket::{
     BufCustom
 };
 use log::info;
-use afxdp::{mmap_area::{MmapArea, MmapAreaOptions}, buf::Buf, buf_mmap::BufMmap};
-use tokio::task::JoinHandle;
+use afxdp::{mmap_area::{MmapArea, MmapAreaOptions}, buf::Buf};
+use tokio::{
+    task::JoinHandle,
+    sync::RwLock,
+};
 use cli_server::cli_server::cli_server::UdpServerStats;
 
 const BUFF_SIZE: usize = 4096;
@@ -24,8 +27,21 @@ pub struct UdpServer{
 }
 
 pub enum UdpServerCommand{
-    Get{tx: tokio::sync::oneshot::Sender<UdpServerStats>}
-    
+    Get{tx: tokio::sync::oneshot::Sender<UdpServerStats>},
+    Reset{tx: tokio::sync::oneshot::Sender<UdpServerStats>},
+}
+
+pub enum StatsCommand{
+    Get(tokio::sync::oneshot::Sender<String>),
+}
+
+#[derive(Default)]
+pub struct StatsMap{
+    pub last_expected: u32,
+    pub last_seq_num: u32,
+    pub rx_packets: usize,
+    pub out_of_order: u32,
+    pub ooo_packets: HashSet<u32>
 }
 
 impl UdpServer{
@@ -39,27 +55,42 @@ impl UdpServer{
 
     pub async fn run(&self, mut xsk_map: XskMap<MapData>, mut ctrl_rx: tokio::sync::mpsc::Receiver<UdpServerCommand>) -> anyhow::Result<()>{
         info!("running udp server");
-
-        let stats = Arc::new(Mutex::new(UdpServerStats{
-            rx: 0,
-            out_of_order: 0,
-        }));
-        let stats_clone = Arc::clone(&stats);
-
-        //let (agg_tx,agg_rx):(tokio::sync::mpsc::Sender<BufMmap<'_, BufCustom>>, tokio::sync::mpsc::Receiver<BufMmap<'_, BufCustom>>) = tokio::sync::mpsc::channel(100);
+        let stats_map = Arc::new(RwLock::new(StatsMap::default()));
+        let stats_map_clone = Arc::clone(&stats_map);
         let mut jh_list = Vec::new();
-         
         let jh = tokio::spawn( async move{
-            let stats = Arc::clone(&stats);
             loop {
                 match ctrl_rx.recv().await{
                     Some(msg) => {
                         match msg {
                             UdpServerCommand::Get{tx} => {
-                                let stats = stats.lock().unwrap();
-                                let _ = tx.send(stats.clone());
-                            }
-                        }
+                                let stats_map = stats_map.read().await;
+                                let udp_server_stats = UdpServerStats{
+                                    rx: stats_map.rx_packets as i32,
+                                    out_of_order: stats_map.out_of_order as i32,
+                                };
+                                match tx.send(udp_server_stats){
+                                    Ok(_) => {  },
+                                    Err(_e) => { info!("failed to send stats reply"); },
+                                }
+                            },
+                            UdpServerCommand::Reset{tx} => {                                
+                                let mut stats_map = stats_map.write().await;
+                                stats_map.rx_packets = 0;
+                                stats_map.out_of_order = 0;
+                                stats_map.last_seq_num = 0;
+                                stats_map.last_expected = 0;
+                                stats_map.ooo_packets.clear();
+                                let udp_server_stats = UdpServerStats{
+                                    rx: stats_map.rx_packets as i32,
+                                    out_of_order: stats_map.out_of_order as i32,
+                                };
+                                match tx.send(udp_server_stats){
+                                    Ok(_) => {  },
+                                    Err(_e) => { info!("failed to send stats reply"); },
+                                }
+                            },
+                        } 
                     },
                     None => {
                         info!("ctrl channel closed");
@@ -68,23 +99,17 @@ impl UdpServer{
                 }
             }
             Ok(())
-
         });
-        jh_list.push(jh); 
+        jh_list.push(jh);
         
-        let ooo_map = Arc::new(Mutex::new(HashSet::new()));
-        let mut last_expected = 0;
-        info!("interface map: {:?}", self.interface_map);
-        let mut last_seq_num = 0;
-        let mut rx_packets = 0;
-        let mut out_of_order = 0;
-        for (intf, intf_idx) in &self.interface_map {
+        for (intf, _intf_idx) in &self.interface_map {
             let queues = if let Some(queues) = self.queues{
                 queues
             } else {
                 1
             };
             for queue in 0..queues{
+                let stats_map = Arc::clone(&stats_map_clone);
                 info!("creating socket for interface {}, queue {}", intf, queue);
                 let options = MmapAreaOptions{ huge_tlb: false };
                 let map_area = MmapArea::new(BUF_NUM, BUFF_SIZE, options);
@@ -98,9 +123,8 @@ impl UdpServer{
                     _ => panic!("socket type is not Rx"),
                 };
                 //let agg_tx = agg_tx.clone();
-                let stats = Arc::clone(&stats_clone);
-                let ooo_map = Arc::clone(&ooo_map);
                 xsk_map.set(queue as u32, rx.fd, 0)?;
+
                 let jh: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move{
                     let rx = match rx_socket.socket{
                         SocketType::Rx(ref mut rx) => { rx }
@@ -121,8 +145,8 @@ impl UdpServer{
                         match rx.try_recv(&mut rx_socket.v, BATCH_SIZE, custom) {
                             Ok(n) => {
                                 if n > 0 {
-                                    rx_packets += n;
-                                    //info!("received batch with {} packets", n);
+                                    let mut stats_map = stats_map.write().await;
+                                    stats_map.rx_packets += n;
                                     for _v in rx_socket.v.drain(0..) {
                                     //while let Some(_v) = rx_socket.v.pop_front(){
                                         let data = _v.get_data();
@@ -132,55 +156,31 @@ impl UdpServer{
                                             let seq_num = unsafe { (*bth_hdr).psn_seq };
                                             u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]])
                                         };
-                                        //info!("seq_num: {}, last_seq_num: {}", seq_num, last_seq_num);
-                                        let mut ooo_map = ooo_map.lock().unwrap();
-                                        if last_seq_num > 0 {
-                                            
-                                            if last_seq_num + 1 != seq_num {
-                                                out_of_order += 1;
-                                                ooo_map.insert(seq_num);
-                                                last_expected = last_seq_num + 1;
-                                                info!("out of order packet, expected {}, got {}. buffering", last_seq_num + 1, seq_num);
-                                                loop {
-                                                    if ooo_map.remove(&(last_seq_num + 1)){
-                                                        info!("found buffered packet {}", last_seq_num + 1);
-                                                        last_seq_num += 1;
-                                                    } else {
-                                                        break;
-                                                    }
-                                                }
-
+                                        
+                                        if stats_map.last_seq_num > 0 {
+                                            if stats_map.last_seq_num + 1 != seq_num {
+                                                stats_map.out_of_order += 1;
+                                                stats_map.ooo_packets.insert(seq_num);
+                                                stats_map.last_expected = stats_map.last_seq_num + 1;
+                                                info!("out of order packet, expected {}, got {}. buffering", stats_map.last_seq_num + 1, seq_num);
                                             } else {
-                                                if last_expected == seq_num {
+                                                if stats_map.last_expected == seq_num {
                                                     info!("received last missing seq {}", seq_num);
                                                 }
-                                                last_seq_num = seq_num;
+                                                stats_map.last_seq_num = seq_num;
                                             }
                                         } else {
-                                            last_seq_num = seq_num;
+                                            stats_map.last_seq_num = seq_num;
                                         }
                                         loop {
-                                            if ooo_map.remove(&(last_seq_num + 1)){
-                                                info!("found buffered packet 2 {}", last_seq_num + 1);
-                                                last_seq_num += 1;
+                                            let l = stats_map.last_seq_num + 1;
+                                            if stats_map.ooo_packets.remove(&(l)){
+                                                info!("found buffered packet {}", l);
+                                                stats_map.last_seq_num += 1;
                                             } else {
                                                 break;
                                             }
                                         }
-                                        let mut stats = stats.lock().unwrap();
-                                        stats.rx = rx_packets as i32;
-                                        stats.out_of_order = out_of_order;
-                                        /*
-                                        match agg_tx.send(_v).await{
-                                            Ok(_) => {
-                                                
-                                                //info!("sent to agg")
-                                            },
-                                            Err(e) => {
-                                                panic!("error sending to agg: {}", e)
-                                            }
-                                        }
-                                        */
                                     }
                                     rx_socket.fq_deficit += n;
                                 } else if rx_socket.fq.needs_wakeup() {
@@ -205,36 +205,8 @@ impl UdpServer{
                 jh_list.push(jh); 
             }
         }
-
-
-
         futures::future::join_all(jh_list).await;
         info!("udp server finished");
         Ok(())
     }
-}
-
-pub async fn aggregator(mut rx: tokio::sync::mpsc::Receiver<BufMmap<'_, BufCustom>>) -> anyhow::Result<()>{
-    info!("starting agg");
-    let mut last_seq_num = 0;
-    while let Some(v) = rx.recv().await{
-        info!("got packet in agg");
-        let data = v.get_data();
-        let data_ptr = data.as_ptr() as usize;
-        let bth_hdr = (data_ptr + EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN) as *const BthHdr;
-        let seq_num = {
-            let seq_num = unsafe { (*bth_hdr).psn_seq };
-            u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]])
-        };
-        info!("seq_num: {}", seq_num);
-        if last_seq_num > 0 {
-            if last_seq_num + 1 != seq_num {
-                info!("out of order packet, expected {}, got {}", last_seq_num + 1, seq_num);
-            } else {
-                info!("received seq {}", seq_num);
-            }
-            last_seq_num = seq_num;
-        }
-    }
-    Ok(())
 }

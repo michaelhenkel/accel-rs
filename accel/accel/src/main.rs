@@ -7,7 +7,7 @@ use aya_log::BpfLogger;
 use clap::{Parser, Subcommand};
 use log::{info, warn, debug};
 use tokio::signal;
-use cli_server::{self, StatsMsg};
+use cli_server::{self, StatsMsg, Action};
 use common::{
     Stats,
     RouteNextHop
@@ -355,15 +355,33 @@ async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: to
             match stats_msg.stats_type{
                 StatsType::Interface => {
                     if let Some(iface_idx) = iface_map.get(&stats_msg.iface){
-                        if let Ok(stats) = stats_map.get(iface_idx, 0){
-                            let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
-                                rx: stats.rx as i32,
-                            };
-                            if let Err(e) = stats_msg.tx.send(stats_reply::Stats::InterfaceStats(iface_stats)){
-                                panic!("Failed to send stats to client");
-                            }
-                        } else {
-                            info!("stats handler failed to find stats for interface {} index {}", stats_msg.iface, iface_idx);
+                        match stats_msg.action{
+                            Action::Get => {
+                                if let Ok(stats) = stats_map.get(iface_idx, 0){
+                                    let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
+                                        rx: stats.rx as i32,
+                                    };
+                                    if let Err(e) = stats_msg.tx.send(stats_reply::Stats::InterfaceStats(iface_stats)){
+                                        panic!("Failed to send stats to client");
+                                    }
+                                } else {
+                                    info!("stats handler failed to find stats for interface {} index {}", stats_msg.iface, iface_idx);
+                                }
+                            },
+                            Action::Reset => {
+                                if let Ok(mut stats) = stats_map.get(iface_idx, 0){
+                                    stats.rx = 0;
+                                    stats_map.insert(iface_idx, &stats, 0)?;
+                                    let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
+                                        rx: stats.rx as i32,
+                                    };
+                                    if let Err(e) = stats_msg.tx.send(stats_reply::Stats::InterfaceStats(iface_stats)){
+                                        panic!("Failed to send stats to client");
+                                    }
+                                } else {
+                                    info!("stats handler failed to find stats for interface {} index {}", stats_msg.iface, iface_idx);
+                                }
+                            },
                         }
                     } else {
                         info!("stats handler failed to find index interface {}", stats_msg.iface);
@@ -375,10 +393,22 @@ async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: to
                         },
                         CliProgram::UdpServer => {
                             let (udp_stats_tx, udp_stats_rx) = tokio::sync::oneshot::channel();
-                            let udp_command = UdpServerCommand::Get { tx: udp_stats_tx };
-                            if let Err(e) = udp_tx.clone().unwrap().send(udp_command).await{
-                                panic!("Failed to send stats to udp server: {}", e);
-                            };
+                            match stats_msg.action{
+                                Action::Get => {
+                                    let udp_command = UdpServerCommand::Get { tx: udp_stats_tx };
+                                    if let Err(e) = udp_tx.clone().unwrap().send(udp_command).await{
+                                        panic!("Failed to send stats to udp server: {}", e);
+                                    };
+                                },
+                                Action::Reset => {
+                                    let udp_command = UdpServerCommand::Reset { tx: udp_stats_tx };
+                                    if let Err(e) = udp_tx.clone().unwrap().send(udp_command).await{
+                                        panic!("Failed to send stats to udp server: {}", e);
+                                    };
+                                },
+                            }
+                            
+
                             let udp_stats = udp_stats_rx.await.unwrap();
                             if let Err(e) = stats_msg.tx.send(stats_reply::Stats::UdpServerStats(udp_stats)){
                                 panic!("Failed to send stats to client");
