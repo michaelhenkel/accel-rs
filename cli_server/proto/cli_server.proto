@@ -21,6 +21,7 @@ message StatsReply {
 
 message InterfaceStats{
     int32 rx = 1;
+    int32 ooo = 2;
 }
 
 message UdpServerStats{

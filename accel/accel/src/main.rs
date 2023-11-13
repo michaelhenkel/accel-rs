@@ -4,7 +4,8 @@ use aya::{include_bytes_aligned, Bpf,
     maps::{HashMap as AyaHashMap, XskMap, lpm_trie::LpmTrie, Array
 }};
 use aya_log::BpfLogger;
-use clap::{Parser, Subcommand};
+use clap::builder::ValueParserFactory;
+use clap::{Parser, Subcommand, Args, ValueEnum};
 use log::{info, warn, debug};
 use tokio::signal;
 use cli_server::{self, StatsMsg, Action};
@@ -34,10 +35,29 @@ struct Opt {
     flowlet_size: Option<u32>,
     #[clap(short, long)]
     endpoints: Option<Vec<String>>,
-    #[clap(short, long)]
-    queues: Option<u8>,
+    #[arg(short = 'q', value_parser = parse_key_val::<u8, u8>)]
+    queues: Option<Vec<(u8, u8)>>,
     #[clap(short, long)]
     zero_copy: Option<bool>,
+}
+
+fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn std::error::Error + Send + Sync + 'static>>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+    U: std::str::FromStr,
+    U::Err: std::error::Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+#[derive(Debug, Args, Clone)]
+struct StashPushArgs {
+    #[arg(short, long)]
+    message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash, Eq)]
@@ -149,7 +169,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 let program_handler: Box<dyn ProgramHandler> = match program_name{
                     ProgramName::UdpServer => {
                         Box::new(UdpServerHandler{
-                            queues: opt.queues,
+                            queues: opt.queues.clone(),
                             zero_copy: opt.zero_copy
                         })
                     },
@@ -294,7 +314,7 @@ impl ProgramHandler for AccelHandler{
 }
 
 pub struct UdpServerHandler{
-    queues: Option<u8>,
+    queues: Option<Vec<(u8,u8)>>,
     zero_copy: Option<bool>,
 }
 
@@ -316,7 +336,7 @@ impl ProgramHandler for UdpServerHandler{
             false
         };
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let udp_s = udp_server::UdpServer::new(zero_copy, interface_map.clone(), self.queues);
+        let udp_s = udp_server::UdpServer::new(zero_copy, interface_map.clone(), self.queues.clone());
         let udp_server_jh = tokio::spawn(async move {
             if let Err(e) = udp_s.run(xsk_map, rx).await{
                 return Err(e);
@@ -360,6 +380,7 @@ async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: to
                                 if let Ok(stats) = stats_map.get(iface_idx, 0){
                                     let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
                                         rx: stats.rx as i32,
+                                        ooo: stats.ooo as i32,
                                     };
                                     if let Err(e) = stats_msg.tx.send(stats_reply::Stats::InterfaceStats(iface_stats)){
                                         panic!("Failed to send stats to client");
@@ -370,11 +391,13 @@ async fn stats_handler(mut bpf: Bpf, iface_map: HashMap<String, u32>, mut rx: to
                             },
                             Action::Reset => {
                                 if let Ok(mut stats) = stats_map.get(iface_idx, 0){
-                                    stats.rx = 0;
-                                    stats_map.insert(iface_idx, &stats, 0)?;
                                     let iface_stats = cli_server::cli_server::cli_server::InterfaceStats{
                                         rx: stats.rx as i32,
+                                        ooo: stats.ooo as i32,
                                     };
+                                    stats.rx = 0;
+                                    stats.ooo = 0;
+                                    stats_map.insert(iface_idx, &stats, 0)?;
                                     if let Err(e) = stats_msg.tx.send(stats_reply::Stats::InterfaceStats(iface_stats)){
                                         panic!("Failed to send stats to client");
                                     }

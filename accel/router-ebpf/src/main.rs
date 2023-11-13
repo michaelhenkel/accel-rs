@@ -15,7 +15,7 @@ use network_types::{
     udp::UdpHdr,
 };
 use common::{
-    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop,
+    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop, BthHdr,
 };
 
 
@@ -31,6 +31,10 @@ static mut FLOWTABLE: HashMap<FlowKey, FlowNextHop> =
 
 #[map(name = "FLOWLETSIZE")]
 static mut FLOWLETSIZE: HashMap<u8, u32> =
+    HashMap::<u8, u32>::with_max_entries(1, 0);
+
+#[map(name = "LASTSEQ")]
+static mut LASTSEQ: HashMap<u8, u32> =
     HashMap::<u8, u32>::with_max_entries(1, 0);
 
 #[map(name = "ROUTETABLE")]
@@ -65,13 +69,8 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         warn!(&ctx, "received UDP packet with dest port {}", u16::from_be(unsafe { (*udp_hdr).dest }));
         return Ok(xdp_action::XDP_PASS);
     }
-
-    
-
     let flow_next_hop = if let Some((flow_next_hop, flow_key)) = get_v4_next_hop_from_flow_table(&ctx){
-        //info!(&ctx, "flow_next_hop_counter: {}, flowlet_size {}", flow_next_hop.counter, flow_next_hop.flowlet_size);
         if flow_next_hop.flowlet_size > 0 && flow_next_hop.counter % (flow_next_hop.flowlet_size + 1) == 0 {
-            //info!(&ctx, "flowlet_size reached, getting new link");
             let packet_count = flow_next_hop.counter;
             let current_link = flow_next_hop.current_link;
             delete_flow(&ctx, flow_key);
@@ -80,12 +79,6 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             } else {
                 info!(&ctx, "no flow info found, pass");
                 return Ok(xdp_action::XDP_PASS);
-                /*
-                info!(&ctx,"redirecting packet to socket");
-                let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
-                return XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
-                */
-                //return Ok(xdp_action::XDP_PASS);
             }
         } else {
             flow_next_hop
@@ -96,37 +89,31 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         } else {
             info!(&ctx, "no flow info found, pass");
             return Ok(xdp_action::XDP_PASS);
-            /* 
-            info!(&ctx,"redirecting packet to socket");
-            let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
-            let res = XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
-            match res {
-                Ok(ret) => {
-                    info!(&ctx, "redirected packet to socket");
-                    return Ok(ret);
-                },
-                Err(e) => { 
-                    info!(&ctx, "redirect failed: {}, queue_idx {}", e, queue_idx); 
-                    return Ok(e)
-                }
-            }
-            */
-            //return XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64);
-            //return Ok(xdp_action::XDP_PASS);
         }
     };
-
+    let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
+    let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
+    unsafe { (*statsmap).rx += 1 };
+    let last_seq = match unsafe { LASTSEQ.get_ptr_mut(&0) }{
+        Some(seq_num) => seq_num,
+        None => {
+            unsafe { LASTSEQ.insert(&0, &0, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
+            unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
+        }
+    };
+    let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
+    let seq_num = unsafe { (*bth_hdr).psn_seq };
+    let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
+    if unsafe { *last_seq } > 0 {
+        if seq_num != unsafe { *last_seq + 1 } {
+            unsafe { (*statsmap).ooo += 1 };
+        }
+    } else {}
+    unsafe { *last_seq = seq_num };
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
     let res = unsafe { bpf_redirect(if_idx, 0)};
-    /*
-    let src_mac = common::mac_to_int(unsafe { (*eth_hdr).src_addr });
-    let dst_mac = common::mac_to_int(unsafe { (*eth_hdr).dst_addr });
-    let src_ip = u32::from_be(unsafe { (*ipv4_hdr).src_addr });
-    let dst_ip = u32::from_be(unsafe { (*ipv4_hdr).dst_addr });
-    info!(&ctx,"redirecting packet src_mac {:x} dst_mac {:x} src_ip {:i} dst_ip {:i} to interface idx {}",src_mac, dst_mac, src_ip, dst_ip, if_idx);
-    */
     Ok(res as u32)
 }
 
@@ -151,9 +138,6 @@ pub fn delete_flow(ctx: &XdpContext, flow_key: FlowKey){
 
 #[inline(always)]
 pub fn get_v4_next_hop_from_flow_table(ctx: &XdpContext) -> Option<(FlowNextHop, FlowKey)>{
-
-
-
     let ipv4_hdr_ptr = ptr_at::<Ipv4Hdr>(&ctx, EthHdr::LEN)?;
     let udp_hdr_ptr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
     let mut flow_key: FlowKey = unsafe { zeroed() };

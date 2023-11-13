@@ -15,6 +15,6 @@ udp_server:
 	(cd udp_server; cargo build --release --target=${ARCH}-unknown-linux-gnu)
 
 accel: ebpf
-	(cd accel; cargo build --release --target=${ARCH}-unknown-linux-gnu)
+	(cd accel; RUSTFLAGS="--cfg s2n_quic_unstable" cargo build --release --target=${ARCH}-unknown-linux-gnu)
 ebpf:
 	(cd accel; cargo xtask build-ebpf --release)

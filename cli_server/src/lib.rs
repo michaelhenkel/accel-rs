@@ -6,7 +6,7 @@ use tonic::{transport::Server, Request, Response, Status};
 
 pub mod cli_server;
 
-use cli_server::cli_server::{StatsReply, StatsRequest, InterfaceStats, ProgramType, StatsType, stats_reply, UdpServerStats};
+use cli_server::cli_server::{StatsReply, StatsRequest, ProgramType, StatsType, stats_reply};
 use cli_server::cli_server::stats_server::{Stats, StatsServer};
 
 pub struct CliServer{

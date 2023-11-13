@@ -11,13 +11,19 @@ network-types = "0.0.4"
 socket = { path = "../../socket" }
 libbpf-sys = "0.7.0"
 afxdp = { git = "https://github.com/michaelhenkel/afxdp-rs"}
+#afxdp-rs = { path = "../../../afxdp-rs" }
 arraydeque = "0.4"
 anyhow = "1"
 log = "0.4"
 aya = { git = "https://github.com/aya-rs/aya", features = ["async_tokio"] }
-tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
+tokio = { version = "1", features = ["full"] }
 futures = "0.3.28"
 cli_server = { path = "../../cli_server" }
+core_affinity = "0.8.1"
+s2n-quic-core = { version = "0.31.0"}
+s2n-quic = { version = "1.31.0", features = ["unstable-provider-io-xdp"] }
+rand = "0.8.5"
+s2n-quic-xdp = "0.31.0"
 
 
 

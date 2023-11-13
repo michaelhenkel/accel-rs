@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stats_type: stats_type.into(),
             });
             let response = client.reset(request).await?;
-            println!("RESPONSE={:?}", response);
+            println!("RESPONSE={:?}", response.into_inner().stats.unwrap());
         },
     }
     Ok(())

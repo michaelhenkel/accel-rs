@@ -105,6 +105,7 @@ pub fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
 #[derive(Clone, Copy, Default)]
 pub struct Stats {
     pub rx: u32,
+    pub ooo: u32,
 }
 
 #[cfg(feature = "user")]

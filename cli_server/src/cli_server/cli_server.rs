@@ -30,6 +30,8 @@ pub mod stats_reply {
 pub struct InterfaceStats {
     #[prost(int32, tag = "1")]
     pub rx: i32,
+    #[prost(int32, tag = "2")]
+    pub ooo: i32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
