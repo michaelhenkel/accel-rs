@@ -27,6 +27,7 @@ message InterfaceStats{
 message UdpServerStats{
     int32 rx = 1;
     int32 outOfOrder = 2;
+    int32 inOrder = 3;
 }
 
 enum ProgramType {

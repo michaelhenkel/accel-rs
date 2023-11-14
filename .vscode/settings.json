@@ -11,5 +11,12 @@
         "./socket/Cargo.toml",
 
     ],
+    "rust-analyzer.server.extraEnv": {
+        "RUSTFLAGS": "--cfg s2n_quic_unstable"
+    },
+    "rust-analyzer.cargo.cfgs": {
+        "rustflags": "--cfg s2n_quic_unstable"
+
+    },
     "rust-analyzer.showUnlinkedFileNotification": false
 }

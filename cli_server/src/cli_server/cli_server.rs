@@ -40,6 +40,8 @@ pub struct UdpServerStats {
     pub rx: i32,
     #[prost(int32, tag = "2")]
     pub out_of_order: i32,
+    #[prost(int32, tag = "3")]
+    pub in_order: i32,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
