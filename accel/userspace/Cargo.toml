@@ -1,5 +1,5 @@
 [package]
-name = "router"
+name = "userspace"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,9 +8,8 @@ aya-bpf = { git = "https://github.com/aya-rs/aya" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
 common = { path = "../../common" }
 network-types = "0.0.4"
-socket = { path = "../../socket" }
 libbpf-sys = "0.7.0"
-afxdp = { git = "https://github.com/michaelhenkel/afxdp-rs"}
+afxdp = { path = "../afxdp" }
 arraydeque = "0.4"
 anyhow = "1"
 log = "0.4"
@@ -20,6 +19,14 @@ futures = "0.3.28"
 rtnetlink = "0.13.1"
 netlink-packet-route = { version = "0.17.1", features = ["rich_nlas"] }
 pnet = "0.34.0"
+s2n-quic-core = { version = "0.31.0"}
+s2n-quic = { version = "1.31.0", features = ["unstable-provider-io-xdp"] }
+rand = "0.8.5"
+s2n-quic-xdp = "0.31.0"
+cli_server = { path = "../../cli_server" }
+serde_yaml = "0.9.27"
+serde = { version = "1.0.192", features = ["derive"] }
+async-trait = "0.1.74"
 
-
-
+[lib]
+path = "src/lib.rs"

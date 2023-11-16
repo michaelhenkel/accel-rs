@@ -5,10 +5,8 @@
         "./cli_server/Cargo.toml",
         "./accel/accel-ebpf/Cargo.toml",
         "./accel/udp-server-ebpf/Cargo.toml",
-        "./accel/udp-server/Cargo.toml",
-        "./accel/router/Cargo.toml",
+        "./accel/userspace/Cargo.toml",
         "./accel/router-ebpf/Cargo.toml",
-        "./socket/Cargo.toml",
 
     ],
     "rust-analyzer.server.extraEnv": {

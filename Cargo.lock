@@ -9,7 +9,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
- "aya-log 0.1.13",
+ "aya-log",
  "clap",
  "cli_server",
  "common",
@@ -18,9 +18,10 @@ dependencies = [
  "libc",
  "log",
  "network-types",
- "router",
+ "serde",
+ "serde_yaml",
  "tokio",
- "udp-server",
+ "userspace",
 ]
 
 [[package]]
@@ -37,6 +38,30 @@ name = "adler"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
+
+[[package]]
+name = "afxdp"
+version = "0.1.0"
+dependencies = [
+ "afxdp 0.4.0",
+ "anyhow",
+ "arraydeque",
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-bpf",
+ "aya-log-ebpf",
+ "cli_server",
+ "common",
+ "core_affinity",
+ "futures",
+ "libbpf-sys",
+ "log",
+ "network-types",
+ "rand 0.8.5",
+ "s2n-quic",
+ "s2n-quic-core",
+ "s2n-quic-xdp",
+ "tokio",
+]
 
 [[package]]
 name = "afxdp"
@@ -264,14 +289,12 @@ checksum = "758d57288601ecc9d149e3413a5f23d6b72c0373febc97044d4f4aa149033b5e"
 dependencies = [
  "bitflags 1.3.2",
  "bytes",
- "futures",
  "lazy_static",
  "libc",
  "log",
  "object 0.28.4",
  "parking_lot",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -328,37 +351,15 @@ dependencies = [
 
 [[package]]
 name = "aya-log"
-version = "0.1.11-dev.0"
-source = "git+https://github.com/aya-rs/aya-log#f3202ac6684c75a3ad6741c6ac2e0dd24119d2fc"
-dependencies = [
- "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "aya-log-common 0.1.11-dev.0",
- "bytes",
- "dyn-fmt",
- "log",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "aya-log"
 version = "0.1.13"
 source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
- "aya-log-common 0.1.13",
+ "aya-log-common",
  "bytes",
  "log",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "aya-log-common"
-version = "0.1.11-dev.0"
-source = "git+https://github.com/aya-rs/aya-log#f3202ac6684c75a3ad6741c6ac2e0dd24119d2fc"
-dependencies = [
- "aya 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -375,7 +376,7 @@ version = "0.1.0"
 source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
  "aya-bpf",
- "aya-log-common 0.1.13",
+ "aya-log-common",
  "aya-log-ebpf-macros",
 ]
 
@@ -384,7 +385,7 @@ name = "aya-log-ebpf-macros"
 version = "0.1.0"
 source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
- "aya-log-common 0.1.13",
+ "aya-log-common",
  "aya-log-parser",
  "proc-macro2",
  "quote",
@@ -396,7 +397,7 @@ name = "aya-log-parser"
 version = "0.1.11-dev.0"
 source = "git+https://github.com/aya-rs/aya#f037a94c9f0f3ea4ccdfec631446384e188b64c5"
 dependencies = [
- "aya-log-common 0.1.13",
+ "aya-log-common",
 ]
 
 [[package]]
@@ -663,12 +664,6 @@ name = "dunce"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56ce8c6da7551ec6c462cbaf3bfbc75131ebbfa1c944aeaa9dab51ca1c5f0c3b"
-
-[[package]]
-name = "dyn-fmt"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a0836c9bd73a9d3ca55b0effc5b1eedf96dd13ef994389bcac6d4d33c46188"
 
 [[package]]
 name = "either"
@@ -1876,28 +1871,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "router"
-version = "0.1.0"
-dependencies = [
- "afxdp",
- "anyhow",
- "arraydeque",
- "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
- "aya-bpf",
- "aya-log-ebpf",
- "common",
- "futures",
- "libbpf-sys",
- "log",
- "netlink-packet-route",
- "network-types",
- "pnet",
- "rtnetlink",
- "socket",
- "tokio",
-]
-
-[[package]]
 name = "rtnetlink"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2187,18 +2160,18 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.189"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e422a44e74ad4001bdc8eede9a4570ab52f71190e9c076d14369f38b9200537"
+checksum = "bca2a08484b285dcb282d0f67b26cadc0df8b19f8c12502c13d966bf9482f001"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.189"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e48d1f918009ce3145511378cf68d613e3b3d9137d67272562080d68a2b32d5"
+checksum = "d6c7207fbec9faa48073f3e3074cbe553af6ea512d7c21ba46e434e70ea9fbc1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2207,9 +2180,9 @@ dependencies = [
 
 [[package]]
 name = "serde_yaml"
-version = "0.9.25"
+version = "0.9.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a49e178e4452f45cb61d0cd8cebc1b0fafd3e41929e996cef79aa3aca91f574"
+checksum = "3cc7a1570e38322cfe4154732e5110f887ea57e22b76f4bfd32b5bdd3368666c"
 dependencies = [
  "indexmap 2.0.2",
  "itoa",
@@ -2253,20 +2226,6 @@ name = "smallvec"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
-
-[[package]]
-name = "socket"
-version = "0.1.0"
-dependencies = [
- "afxdp",
- "arraydeque",
- "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
- "aya-bpf",
- "aya-log 0.1.11-dev.0",
- "libbpf-sys",
- "log",
- "network-types",
-]
 
 [[package]]
 name = "socket2"
@@ -2546,31 +2505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3528ecfd12c466c6f163363caf2d02a71161dd5e1cc6ae7b34207ea2d42d81ed"
 
 [[package]]
-name = "udp-server"
-version = "0.1.0"
-dependencies = [
- "afxdp",
- "anyhow",
- "arraydeque",
- "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
- "aya-bpf",
- "aya-log-ebpf",
- "cli_server",
- "common",
- "core_affinity",
- "futures",
- "libbpf-sys",
- "log",
- "network-types",
- "rand 0.8.5",
- "s2n-quic",
- "s2n-quic-core",
- "s2n-quic-xdp",
- "socket",
- "tokio",
-]
-
-[[package]]
 name = "udp_client"
 version = "0.1.0"
 dependencies = [
@@ -2626,6 +2560,35 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "userspace"
+version = "0.1.0"
+dependencies = [
+ "afxdp 0.1.0",
+ "anyhow",
+ "arraydeque",
+ "async-trait",
+ "aya 0.11.0 (git+https://github.com/aya-rs/aya)",
+ "aya-bpf",
+ "aya-log-ebpf",
+ "cli_server",
+ "common",
+ "futures",
+ "libbpf-sys",
+ "log",
+ "netlink-packet-route",
+ "network-types",
+ "pnet",
+ "rand 0.8.5",
+ "rtnetlink",
+ "s2n-quic",
+ "s2n-quic-core",
+ "s2n-quic-xdp",
+ "serde",
+ "serde_yaml",
+ "tokio",
+]
 
 [[package]]
 name = "utf8parse"

@@ -1,16 +1,8 @@
 use core::panic;
-use std::{collections::{HashMap, BTreeMap}, hash::Hash, net::{Ipv4Addr, IpAddr}, fmt::Display};
+use std::{collections::{HashMap, BTreeMap}, net::{Ipv4Addr, IpAddr}, fmt::Display, sync::{Arc, Mutex}};
 use aya::maps::{XskMap, MapData, LpmTrie, lpm_trie::Key};
-use socket::{
-    Socket,
-    SocketRxTx,
-    SocketType,
-    BufCustom
-};
 use common::RouteNextHop;
 use log::info;
-use afxdp::{mmap_area::{MmapArea, MmapAreaOptions}, buf::Buf};
-use tokio::task::JoinHandle;
 use futures::stream::TryStreamExt;
 use rtnetlink::{new_connection, Error, Handle, IpVersion};
 use netlink_packet_route::{rtnl::{
@@ -23,14 +15,25 @@ use pnet::{
     packet::{
         ethernet::{
             MutableEthernetPacket,
-            EtherTypes, EthernetPacket,
+            EtherTypes,
         },
-        arp::{MutableArpPacket, ArpHardwareTypes, ArpOperations, ArpPacket}, Packet, ipv4::{MutableIpv4Packet, Ipv4Packet}}, util::MacAddr, ipnetwork::IpNetwork
-    };
+        arp::{MutableArpPacket, ArpHardwareTypes, ArpOperations, ArpPacket}, Packet}, util::MacAddr, ipnetwork::IpNetwork
+};
+use s2n_quic_xdp::{
+    io::rx::{self, WithCooldown},
+    socket as afxdp_socket,
+};
+use afxdp::{self, AfXdp};
+use s2n_quic_core::io::{
+    rx::Queue
+};
+use s2n_quic_core::io::tx::Tx as _;
+use s2n_quic_core::io::tx::Queue as _;
+use tokio::io::unix::AsyncFd;
+
+use crate::config::config::Interface;
 
 const BUFF_SIZE: usize = 2048;
-const BUF_NUM: usize = 65535;
-const BATCH_SIZE: usize = 32;
 
 #[derive(Debug)]
 pub struct RouteTable{
@@ -87,20 +90,20 @@ pub fn mac_to_string(mac: [u8;6]) -> String{
 
 pub struct Router{
     pub route_table: RouteTable,
-    zero_copy: bool,
-    interface_map: HashMap<String, u32>,
+    interface_map: HashMap<String, Interface>,
     endpoints: Option<Vec<String>>,
+    order: bool,
 }
 
 impl Router{
-    pub fn new(zero_copy: bool, interface_map: HashMap<String, u32>, endpoints: Option<Vec<String>>) -> Router {
+    pub fn new(interface_map: HashMap<String, Interface>, endpoints: Option<Vec<String>>, order: bool) -> Router {
         Router{
             route_table: RouteTable{
                 routes: HashMap::new()
             },
-            zero_copy,
             interface_map,
             endpoints,
+            order,
         }
     }
     pub async fn run(&mut self, mut route_table: LpmTrie<MapData, u32, [RouteNextHop;32]>, mut xsk_map: XskMap<MapData>) -> anyhow::Result<()>{
@@ -142,142 +145,34 @@ impl Router{
         info!("");
         info!("{}", self.route_table);
 
-        /*
-        let mut jh_list = Vec::new();
-        info!("interface map: {:?}", self.interface_map);
-
-        for (intf, intf_idx) in &self.interface_map {
-            info!("creating socket for interface {}", intf);
-            let options = MmapAreaOptions{ huge_tlb: false };
-            let map_area = MmapArea::new(BUF_NUM, BUFF_SIZE, options);
-            let (area, mut bufs) = match map_area {
-                Ok((ref area, bufs)) => (area, bufs),
-                Err(err) => panic!("no mmap for you: {:?}", err),
-            };
-            let mut rx_socket = Socket::new(area.clone(), &mut bufs, SocketRxTx::Rx, intf.clone(), BUF_NUM, self.zero_copy);
-            let rx = match rx_socket.socket{
-                SocketType::Rx(ref mut rx) => { rx }
-                _ => panic!("socket type is not Rx"),
-            };
-            info!("setting xsk map entry for interface {}, idx {}, socket fd {}", intf, intf_idx, rx.fd);
-            let res = xsk_map.set(0, rx.fd, 0);
-            if let Err(e) = res {
-                panic!("error setting xsk map entry: {:?}", e);
-            }
-            //xsk_map.set(intf_idx.clone(), rx.fd, 0)?;
-            let intf_idx = intf_idx.clone();
-            info!("spawning task for interface {}", intf);
-            let jh: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move{
-                let rx = match rx_socket.socket{
-                    SocketType::Rx(ref mut rx) => { rx }
-                    _ => panic!("socket type is not Rx"),
+        if self.order{
+            let mut interface_channel_map = HashMap::new();
+            let xsk_map_mutex = Arc::new(Mutex::new(xsk_map));
+            for (intf_name, intf) in &self.interface_map {
+                let xsk_map_mutex = Arc::clone(&xsk_map_mutex);
+                let frame_size = BUFF_SIZE as u32;
+                let rx_queue_len = 8192 * 2;
+                let tx_queue_len = 8192;
+                let rx_cooldown = 10;
+                let mut af_xdp = AfXdp::new(intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
+                let (rx_channel, tx_channel) = af_xdp.setup(xsk_map_mutex).unwrap();
+                let rx_channel_m = Arc::new(Mutex::new(rx_channel));
+                let tx_channel_m = Arc::new(Mutex::new(tx_channel));
+                interface_channel_map.insert(intf.idx.unwrap(), (rx_channel_m, tx_channel_m));
+                let rx_f = move |queue: &mut rx::Queue<'_, WithCooldown<Arc<AsyncFd<afxdp_socket::Fd>>>>| {
+                    queue.for_each(|_header, payload| {
+                    });
                 };
-                let custom = BufCustom {};
-                loop {
-                    let r = rx_socket.cq.service(&mut bufs, BATCH_SIZE);
-                    match r {
-                        Ok(n) => {
-                            if n > 0 {
-                                info!("serviced {} packets", n);
-                            }
-                        }
-                        Err(err) => panic!("error: {:?}", err),
-                    };
-                    match rx.try_recv(&mut rx_socket.v, BATCH_SIZE, custom) {
-                        Ok(n) => {
-                            if n > 0 {
-                                while let Some(mut _v) = rx_socket.v.pop_front(){
-                                    info!("received packet");
-                                    let data = _v.get_data();
-                                    let eth_hdr = match EthernetPacket::new(data){
-                                        Some(eth_hdr) => eth_hdr,
-                                        None => panic!("failed to get eth_hdr"),
-                                    };
-                                    let ipv4_hdr = match Ipv4Packet::new(&data[14..]){
-                                        Some(ipv4_hdr) => ipv4_hdr,
-                                        None => panic!("failed to get ipv4_hdr"),
-                                    };
+            }
 
-                                    let (connection, handle, _) = new_connection().unwrap();
-                                    tokio::spawn(connection);
-                                    match get_oif(handle.clone(), ipv4_hdr.get_destination()).await{
-                                        Ok(res) => {
-                                            info!("oif: {:?}", res);
-                                            if let Some(oif) = res{
-                                                match get_local_mac(handle, oif).await{
-                                                    Ok(res) => {
-                                                        if let Some(local_mac) = res {
-                                                            info!("local_mac: {}", mac_to_string(local_mac.clone().try_into().unwrap()));
-                                                            let local_mac: [u8;6] = local_mac.clone().try_into().unwrap();
-                                                            let local_mac = MacAddr::from(local_mac);
-                                                            info!("sending arp");
-                                                            match send_arp(ipv4_hdr.get_destination(), oif, local_mac).await{
-                                                                Ok(res) => {
-                                                                    if let Some(dst_mac) = res {
-                                                                        info!("received packet, dst_mac: {}", dst_mac.to_string());
-                                                                    } else {
-                                                                        info!("received packet, dst_mac not found");
-                                                                    }
-                                                                },
-                                                                Err(e) => {
-                                                                    panic!("error sending arp: {:?}", e);
-                                                                }
-                                                            }
-                                                        } else {
-                                                            panic!("local_mac not found");
-                                                        }
-
-                                                    },
-                                                    Err(e) => {
-                                                        panic!("error getting local mac: {:?}", e);
-                                                    }
-                                                }
-                                                
-
-                                            } else {
-                                                panic!("oif not found");
-                                            }
-                                        },
-                                        Err(e) => {
-                                            panic!("error getting oif: {:?}", e);
-                                        }
-                                    };
-
-
-
-                                    
-
-                                    info!("received packet");
-                                }
-                                rx_socket.fq_deficit += n;
-                            }
-                        },
-                        Err(err) => {
-                            panic!("error: {:?}", err);
-                        }
-                    }
-                    if rx_socket.fq_deficit >= BATCH_SIZE {
-                        let r = rx_socket.fq.fill(&mut bufs, rx_socket.fq_deficit);
-                        match r {
-                            Ok(n) => {
-                                rx_socket.fq_deficit -= n;
-                            }
-                            Err(err) => panic!("error: {:?}", err),
-                        }
-                    }
-                }
-            });
-            info!("pushing task handle for interface {}", intf);
-            jh_list.push(jh);        
-        }
-        futures::future::join_all(jh_list).await;
-        */
-        
+        }    
         Ok(())
     }
+
+
+
     async fn get_routes_for_local_endpoints(&mut self,handle: Handle, endpoints: Option<Vec<String>>) -> anyhow::Result<(), Error> {
         let mut next_hop_list = Vec::new();
-
         if let Some(endpoints) = &endpoints{
             for endpoint in endpoints{
                 let endpoint = if let Ok(endpoint) = endpoint.parse::<Ipv4Addr>(){

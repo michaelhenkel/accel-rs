@@ -17,9 +17,10 @@ tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net"
 network-types = "0.0.4"
 futures = "0.3.28"
 cli_server = { path = "../../cli_server" }
-udp-server = { path = "../udp-server" }
-router = { path = "../router" }
+userspace = { path = "../userspace" }
 async-trait = "0.1.74"
+serde_yaml = "0.9.27"
+serde = { version = "1.0.192", features = ["derive"] }
 
 [[bin]]
 name = "accel"

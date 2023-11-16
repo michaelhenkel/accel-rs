@@ -1,5 +1,5 @@
 [package]
-name = "udp-server"
+name = "afxdp"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,7 +8,6 @@ aya-bpf = { git = "https://github.com/aya-rs/aya" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
 common = { path = "../../common" }
 network-types = "0.0.4"
-socket = { path = "../../socket" }
 libbpf-sys = "0.7.0"
 afxdp = { git = "https://github.com/michaelhenkel/afxdp-rs"}
 #afxdp-rs = { path = "../../../afxdp-rs" }

@@ -1,0 +1,13 @@
+programs:
+- router:
+    endpoints:
+    - "14.0.0.2"
+    interfaces:
+    - name: ens0
+      role: Fabric
+      queues: 1
+    - name: ens1
+      role: Access
+      queues: 1
+    loadBalancer:
+      flowletSize: 4
