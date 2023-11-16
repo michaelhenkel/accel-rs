@@ -24,9 +24,7 @@ use s2n_quic_xdp::{
     socket as afxdp_socket,
 };
 use afxdp::{self, AfXdp};
-use s2n_quic_core::io::{
-    rx::Queue
-};
+use s2n_quic_core::io::rx::Queue;
 use s2n_quic_core::io::tx::Tx as _;
 use s2n_quic_core::io::tx::Queue as _;
 use tokio::io::unix::AsyncFd;
