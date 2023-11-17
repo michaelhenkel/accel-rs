@@ -1,5 +1,5 @@
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}};
-use aya::maps::{XskMap, MapData};
+use aya::maps::{XskMap, MapData, HashMap as AyaHashMap};
 use common::BthHdr;
 use log::info;
 use tokio::{
@@ -25,6 +25,7 @@ const BUFF_SIZE: usize = 2048;
 
 pub struct UdpServer{
     interface_map: HashMap<String, Interface>,
+    xsk_map_list: Arc<Mutex<Vec<XskMap<MapData>>>>,
 }
 
 pub enum UdpServerCommand{
@@ -47,14 +48,14 @@ pub struct StatsMap{
 }
 
 impl UdpServer{
-    pub fn new(interface_map: HashMap<String, Interface>) -> UdpServer {
+    pub fn new(interface_map: HashMap<String, Interface>, xsk_map_list: Arc<Mutex<Vec<XskMap<MapData>>>>) -> UdpServer {
         UdpServer{
             interface_map,
+            xsk_map_list,
         }
     }
-    pub async fn run(&self, xsk_map: XskMap<MapData>, mut ctrl_rx: tokio::sync::mpsc::Receiver<UdpServerCommand>) -> anyhow::Result<()>{
+    pub async fn run(&self, mut ctrl_rx: tokio::sync::mpsc::Receiver<UdpServerCommand>) -> anyhow::Result<()>{
         info!("running udp server");
-        let xsk_map_mutex = Arc::new(Mutex::new(xsk_map));
         let stats_map = Arc::new(Mutex::new(StatsMap::default()));
         let stats_map_clone = Arc::clone(&stats_map);
         let mut jh_list: Vec<JoinHandle<Result<(), Error>>> = Vec::new();
@@ -106,22 +107,24 @@ impl UdpServer{
             Ok(())
         });
         jh_list.push(jh);
-
         for (intf_name, intf) in &self.interface_map {
             let stats_map = Arc::clone(&stats_map);
-            let xsk_map_mutex = Arc::clone(&xsk_map_mutex);
+            let xsk_map_list = self.xsk_map_list.clone();
+            let mut xsk_map_list = xsk_map_list.lock().unwrap();
+            let xsk_map = xsk_map_list.get_mut(0).unwrap();
+            let xsk_map_mutex = Arc::new(Mutex::new(xsk_map));
             info!("creating afxdp socket for interface {}", intf_name);
             let frame_size = BUFF_SIZE as u32;
             let rx_queue_len = 8192 * 2;
             let tx_queue_len = 8192;
             let rx_cooldown = 10;
-            let mut af_xdp = AfXdp::new(intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
-            let (rx_channel, tx_channel) = af_xdp.setup(xsk_map_mutex).unwrap();
+            let mut af_xdp = AfXdp::new(intf.idx.unwrap(), intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
+            let (rx_channel, tx_channel) = af_xdp.setup(xsk_map_mutex, 0).unwrap();
             let tx_channel_m = Arc::new(Mutex::new(tx_channel));
 
             let rx_f = move |queue: &mut rx::Queue<'_, WithCooldown<Arc<AsyncFd<afxdp_socket::Fd>>>>| {
 
-                queue.for_each(|_header, payload| {
+                queue.for_each(|mut _header, payload| {
                     let stats_map = Arc::clone(&stats_map);
                     let mut stats_map = stats_map.lock().unwrap();
                     stats_map.rx_packets += 1;
@@ -153,19 +156,6 @@ impl UdpServer{
                         }
                     }
                     info!("path {:?}", _header.path);
-                    let packet = Packet{
-                        path: _header.path,
-                        ecn: _header.ecn,
-                        counter: seq_num,
-                        data: payload.to_vec(),
-                    };
-                    let tx_channel = Arc::clone(&tx_channel_m);
-                    let mut tx_channel = tx_channel.lock().unwrap();
-                    
-                    tx_channel.queue(|queue| {
-                        info!("sending packet");
-                        queue.push(packet.clone()).unwrap();
-                    });
                 });
                 //packet_list
             };

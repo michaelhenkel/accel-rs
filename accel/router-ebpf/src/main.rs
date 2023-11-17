@@ -15,11 +15,8 @@ use network_types::{
     udp::UdpHdr,
 };
 use common::{
-    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop, BthHdr,
+    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop, BthHdr, InterfaceConfig
 };
-
-
-
 
 #[map(name = "STATSMAP")]
 static mut STATSMAP: HashMap<u32, Stats> =
@@ -43,6 +40,34 @@ static mut ROUTETABLE: LpmTrie<u32, [RouteNextHop;32]> =
 
 #[map(name = "XSKMAP")]
 static XSKMAP: XskMap = XskMap::with_max_entries(2048, 0);
+
+#[map(name = "XSKMAP1")]
+static XSKMAP1: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "XSKMAP2")]
+static XSKMAP2: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "XSKMAP3")]
+static XSKMAP3: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "XSKMAP4")]
+static XSKMAP4: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "XSKMAP5")]
+static XSKMAP5: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "INTERFACEXSKMAP")]
+static INTERFACEXSKMAP: HashMap<u32, u32> =
+    HashMap::<u32, u32>::with_max_entries(5, 0);
+
+#[map(name = "INTERFACECONFIGMAP")]
+static INTERFACECONFIGMAP: HashMap<u32, InterfaceConfig> =
+    HashMap::<u32, InterfaceConfig>::with_max_entries(5, 0);
+
+enum Role{
+    Access,
+    Fabric,
+}
 
 #[xdp]
 pub fn router(ctx: XdpContext) -> u32 {
@@ -101,6 +126,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
         }
     };
+
     let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
     let seq_num = unsafe { (*bth_hdr).psn_seq };
     let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
@@ -113,8 +139,64 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
-    let res = unsafe { bpf_redirect(if_idx, 0)};
-    Ok(res as u32)
+    let local_if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
+    let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+
+    let role = match unsafe { INTERFACECONFIGMAP.get(&local_if_idx)} {
+        Some(interface_config) => {
+            if interface_config.role == 0 {
+                Role::Access
+            } else if interface_config.role == 1{
+                Role::Fabric
+            } else {
+                info!(&ctx, "no role found for if_idx {}", local_if_idx);
+                return Ok(xdp_action::XDP_DROP)
+            }
+        },
+        None => {
+            let res = unsafe { bpf_redirect(if_idx, 0)};
+            return Ok(res as u32)
+        },
+    };
+
+    match role{
+        Role::Access => {
+            let res = unsafe { bpf_redirect(if_idx, 0)};
+            return Ok(res as u32)
+        },
+        Role::Fabric => {
+            let xsk_map = match unsafe { INTERFACEXSKMAP.get(&local_if_idx )}{
+                Some(idx) => {
+                    if *idx == 0 {
+                        &XSKMAP1
+                    } else if *idx == 1 {
+                        &XSKMAP2
+                    } else if *idx == 2 {
+                        &XSKMAP3
+                    } else if *idx == 3 {
+                        &XSKMAP4
+                    } else if *idx == 4 {
+                        &XSKMAP5
+                    } else {
+                        return Ok(xdp_action::XDP_DROP)
+                    }
+                },
+                None => {
+                    return Ok(xdp_action::XDP_DROP)
+                },
+            };
+        
+            match xsk_map.redirect(queue_idx, xdp_action::XDP_DROP as u64){
+                Ok(res) => {
+                    return Ok(res)
+                },
+                Err(_e) => {
+                    let res = unsafe { bpf_redirect(if_idx, 0)};
+                    return Ok(res as u32)
+                }
+            }
+        },
+    }
 }
 
 #[panic_handler]

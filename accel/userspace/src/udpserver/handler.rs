@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use aya::{include_bytes_aligned, Bpf, maps::{LpmTrie, MapData, XskMap, HashMap as AyaHashMap}};
 use cli_server::StatsMsg;
@@ -40,10 +40,15 @@ impl handler::ProgramHandler for UdpServerHandler{
             panic!("XSKMAP map not found");
         };
 
+        let mut xsk_map_list = Vec::new();
+        xsk_map_list.push(xsk_map);
+
+        let xsk_map_list_mutex = Arc::new(Mutex::new(xsk_map_list));
+
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let udp_s = UdpServer::new(interface_map.clone());
+        let udp_s = UdpServer::new(interface_map.clone(), xsk_map_list_mutex);
         let udp_server_jh = tokio::spawn(async move {
-            if let Err(e) = udp_s.run(xsk_map, rx).await{
+            if let Err(e) = udp_s.run(rx).await{
                 return Err(e);
             }
             Ok(())

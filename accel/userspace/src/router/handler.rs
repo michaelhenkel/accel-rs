@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use aya::{include_bytes_aligned, Bpf, maps::{LpmTrie, MapData, XskMap, HashMap as AyaHashMap}};
 use cli_server::StatsMsg;
 use common::RouteNextHop;
 use log::info;
+use pnet::packet::icmp::echo_reply::MutableEchoReplyPacket;
 use tokio::task::JoinHandle;
 use crate::handler::handler::{self, StatsHandler};
 use super::super::config::config::{Interface, LoadBalancer};
@@ -12,10 +13,12 @@ use serde::{Serialize, Deserialize};
 use async_trait::async_trait;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct RouterHandler{
     pub interfaces: Vec<Interface>,
     pub endpoints: Option<Vec<String>>,
-    pub loadbalacer: Option<LoadBalancer>,
+    pub load_balancer: Option<LoadBalancer>,
+    pub in_order: Option<bool>,
 }
 
 #[async_trait]
@@ -45,7 +48,7 @@ impl handler::ProgramHandler for RouterHandler{
 
         if let Some(flowlet_size_map) = bpf.map_mut("FLOWLETSIZE"){
             let mut flowlet_size_map: AyaHashMap<_, u8, u32> = AyaHashMap::try_from(flowlet_size_map).unwrap();
-            let flowlet_size = if let Some(load_balancer) = &self.loadbalacer{
+            let flowlet_size = if let Some(load_balancer) = &self.load_balancer{
                 load_balancer.flowlet_size
             } else {
                 0
@@ -55,15 +58,64 @@ impl handler::ProgramHandler for RouterHandler{
             panic!("FLOWLETSIZE map not found");
         };
 
-        let xsk_map = if let Some(xsk_map) = bpf.take_map("XSKMAP") {
-            XskMap::try_from(xsk_map)?   
+        let xsk_map_1 = if let Some(xsk_map_1) = bpf.take_map("XSKMAP1") {
+            XskMap::try_from(xsk_map_1)?   
         } else {
-            panic!("XSKMAP map not found");
+            panic!("XSKMAP1 map not found");
         };
 
-        let mut router_s = Router::new(interface_map.clone(), self.endpoints.clone(), true);
+        let xsk_map_2 = if let Some(xsk_map_2) = bpf.take_map("XSKMAP2") {
+            XskMap::try_from(xsk_map_2)?   
+        } else {
+            panic!("XSKMAP2 map not found");
+        };
+
+        let xsk_map_3 = if let Some(xsk_map_3) = bpf.take_map("XSKMAP3") {
+            XskMap::try_from(xsk_map_3)?   
+        } else {
+            panic!("XSKMAP3 map not found");
+        };
+
+        let xsk_map_4 = if let Some(xsk_map_4) = bpf.take_map("XSKMAP4") {
+            XskMap::try_from(xsk_map_4)?   
+        } else {
+            panic!("XSKMAP4 map not found");
+        };
+
+        let xsk_map_5 = if let Some(xsk_map_5) = bpf.take_map("XSKMAP5") {
+            XskMap::try_from(xsk_map_5)?   
+        } else {
+            panic!("XSKMAP5 map not found");
+        };
+
+        let mut xsk_map_list = Vec::new();
+        xsk_map_list.push(xsk_map_1);
+        xsk_map_list.push(xsk_map_2);
+        xsk_map_list.push(xsk_map_3);
+        xsk_map_list.push(xsk_map_4);
+        xsk_map_list.push(xsk_map_5);
+
+        let xsk_map_list_mutex = Arc::new(Mutex::new(xsk_map_list));
+
+        let interface_xsk_map = if let Some(interface_xsk_map) = bpf.take_map("INTERFACEXSKMAP") {
+            AyaHashMap::try_from(interface_xsk_map)?
+        } else {
+            panic!("INTERFACEXSKMAP map not found");
+        };
+
+        let interface_xsk_map_mutex = Arc::new(Mutex::new(interface_xsk_map));
+
+        let interface_config_map = if let Some(interface_config_map) = bpf.take_map("INTERFACECONFIGMAP") {
+            AyaHashMap::try_from(interface_config_map)?
+        } else {
+            panic!("INTERFACECONFIGMAP map not found");
+        };
+
+        let interface_config_map_mutex = Arc::new(Mutex::new(interface_config_map));
+
+        let mut router_s = Router::new(interface_map.clone(), self.endpoints.clone(), self.in_order, xsk_map_list_mutex, interface_xsk_map_mutex, interface_config_map_mutex);
         let router_jh = tokio::spawn(async move {
-            if let Err(e) = router_s.run(route_table, xsk_map).await{
+            if let Err(e) = router_s.run(route_table).await{
                 return Err(e);
             }
             Ok(())

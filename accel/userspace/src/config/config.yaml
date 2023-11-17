@@ -1,13 +1,19 @@
 programs:
-- router:
+- Router:
     endpoints:
-    - "14.0.0.2"
+    - "17.0.0.2"
     interfaces:
-    - name: ens0
+    - name: router2.1
       role: Fabric
       queues: 1
-    - name: ens1
+    - name: router2.2
+      role: Fabric
+      queues: 1
+    - name: router2
       role: Access
       queues: 1
     loadBalancer:
       flowletSize: 4
+    inOrder: true
+
+#router2,router2.1,router2.2

@@ -54,6 +54,15 @@ pub struct FlowNextHop {
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for FlowNextHop {}
 
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone)]
+pub struct InterfaceConfig{
+    pub role: u8,
+}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for InterfaceConfig {}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FlowKey {

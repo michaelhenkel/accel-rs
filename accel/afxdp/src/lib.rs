@@ -1,4 +1,5 @@
-use std::{sync::{Arc, Mutex}, ffi::CString, os::fd::AsRawFd};
+use std::{sync::{Arc, Mutex}, ffi::CString, os::fd::AsRawFd, hash::Hasher};
+use std::hash::Hash;
 use core::time::Duration;
 use aya::maps::{XskMap, MapData};
 use log::info;
@@ -28,6 +29,7 @@ use tokio::io::unix::AsyncFd;
 
 #[derive(Clone)]
 pub struct AfXdp{
+    ifidx: u32,
     interface: String,
     rx_queue_len: u32,
     tx_queue_len: u32,
@@ -36,14 +38,36 @@ pub struct AfXdp{
     queue_ids: Vec<u32>,
 }
 
+impl Hash for AfXdp {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.interface.hash(state);
+        self.rx_queue_len.hash(state);
+        self.tx_queue_len.hash(state);
+        self.frame_size.hash(state);
+        self.rx_cooldown.hash(state);
+        self.queue_ids.hash(state);
+    }
+}
+
+impl PartialEq for AfXdp {
+    fn eq(&self, other: &Self) -> bool {
+        self.interface == other.interface
+    }
+}
+
+impl Eq for AfXdp {}
+
 impl AfXdp {
-    pub fn new(interface: String,
+    pub fn new(
+            ifidx: u32,
+            interface: String,
             rx_queue_len: u32,
             tx_queue_len: u32,
             frame_size: u32,
             rx_cooldown: u16,
             queue_ids: Vec<u32>) -> Self {
         Self{
+            ifidx,
             interface,
             rx_queue_len,
             tx_queue_len,
@@ -52,7 +76,7 @@ impl AfXdp {
             queue_ids,
         }
     }
-    pub fn setup(&mut self, xsk_map: Arc<Mutex<XskMap<MapData>>>) -> anyhow::Result<(
+    pub fn setup(&mut self, xsk_map: Arc<Mutex<&mut XskMap<MapData>>>, map_idx: usize) -> anyhow::Result<(
         rx::Rx<WithCooldown<Arc<AsyncFd<socket::Fd>>>>,
         tx::Tx<tx::BusyPoll>,
     )>{
@@ -141,9 +165,10 @@ impl AfXdp {
         }
 
         for (rx_fd, fd) in rx_fds {
-            info!("adding rx_fd {} to xsk map", rx_fd);
             let mut xsk_map = xsk_map.lock().unwrap();
             xsk_map.set(*rx_fd, fd, 0)?;
+            info!("added queue {} to xsk_map at idx {} for intf {} with idx {}", rx_fd, map_idx, self.ifidx, self.interface.clone());
+
         }
         // make sure we've allocated all descriptors from the UMEM to a queue
         assert_eq!(desc.count(), 0, "descriptors have been leaked");

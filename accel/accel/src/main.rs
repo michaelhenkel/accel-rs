@@ -34,6 +34,31 @@ async fn main() -> Result<(), anyhow::Error> {
     if ret != 0 {
         debug!("remove limit on locked memory failed, ret is: {}", ret);
     }
+    info!("starting userspace");
+    let test_config = config::Config{
+        programs: vec![
+            handler::Program::Router(userspace::router::handler::RouterHandler{
+                interfaces: vec![
+                    config::Interface{
+                        name: "enp0s3".to_string(),
+                        idx: None,
+                        order: Some(true),
+                        queues: vec![1],
+                        zero_copy: Some(false),
+                        role: config::Role::Fabric,
+                    }
+                ],
+                endpoints: Some(vec!["1.2.3.4".to_string()]),
+                load_balancer: Some(config::LoadBalancer{
+                    flowlet_size: 4,
+                }),
+                in_order: Some(true),
+            })
+        ],
+    };
+
+    let c = serde_yaml::to_string(&test_config).unwrap();
+    info!("config: {}", c);
 
     let config = match opt.config{
         Some(config) => {
@@ -47,6 +72,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut join_handlers = Vec::new();
     let mut program_tx_map = HashMap::new();
+
+
+    
 
     if let Some(config) = config{
         for program in config.programs{
@@ -111,7 +139,7 @@ fn get_interface_index(interface_name: &str) -> Result<u32, Error> {
     let interface_name_cstring = CString::new(interface_name)?;
     let interface_index = unsafe { libc::if_nametoindex(interface_name_cstring.as_ptr()) };
     if interface_index == 0 {
-        Err(Error::new(ErrorKind::NotFound, "Interface not found"))
+        Err(Error::new(ErrorKind::NotFound, format!("Interface not found {}", interface_name)))
     } else {
         Ok(interface_index)
     }
