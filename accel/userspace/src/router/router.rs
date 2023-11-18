@@ -1,7 +1,7 @@
 use core::panic;
 use std::{collections::{HashMap, BTreeMap}, net::{Ipv4Addr, IpAddr}, fmt::Display, sync::{Arc, Mutex}, hash::Hasher, hash::Hash};
 use aya::maps::{XskMap, MapData, LpmTrie, lpm_trie::Key, HashMap as AyaHashMap};
-use common::{RouteNextHop, InterfaceConfig};
+use common::{RouteNextHop, InterfaceConfig, BthHdr, InterfaceQueue};
 use log::info;
 use futures::stream::TryStreamExt;
 use rtnetlink::{new_connection, Error, Handle, IpVersion};
@@ -19,12 +19,13 @@ use pnet::{
         },
         arp::{MutableArpPacket, ArpHardwareTypes, ArpOperations, ArpPacket}, Packet, ipv4}, util::MacAddr, ipnetwork::IpNetwork
 };
+use s2n_quic::provider::io::xdp::tx;
 use s2n_quic_xdp::{
-    io::rx::{self, WithCooldown},
+    io::{rx::{self, WithCooldown}, tx::{BusyPoll, Tx}},
     socket as afxdp_socket, if_xdp,
 };
 use afxdp::{self, AfXdp};
-use s2n_quic_core::{io::rx::Queue, xdp::path::{LocalAddress, RemoteAddress}, inet::ethernet::MacAddress};
+use s2n_quic_core::{io::rx::Queue, xdp::path::{LocalAddress, RemoteAddress}, inet::{ethernet::MacAddress, IpAddress}};
 use s2n_quic_core::inet::ip;
 use s2n_quic_core::io::tx::Tx as _;
 use s2n_quic_core::io::tx::Queue as _;
@@ -112,16 +113,17 @@ impl PartialEq for FlowKey {
 
 impl Eq for FlowKey {}
 
-type FlowTable = HashMap<FlowKey, u32>;
+type FlowTable = HashMap<FlowKey, Arc<Mutex<Tx<BusyPoll>>>>;
 
 pub struct Router{
     pub route_table: RouteTable,
     interface_map: HashMap<String, Interface>,
     endpoints: Option<Vec<String>>,
     in_order: Option<bool>,
-    xsk_map_list: Arc<Mutex<Vec<XskMap<MapData>>>>,
-    interface_xsk_map: Arc<Mutex<AyaHashMap<MapData, u32, u32>>>,
+    xsk_map: Arc<Mutex<XskMap<MapData>>>,
+    interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>,
     interface_config_map: Arc<Mutex<AyaHashMap<MapData, u32, InterfaceConfig>>>,
+    last_seq_map: Arc<Mutex<AyaHashMap<MapData, u8, u32>>>,
 }
 
 impl Router{
@@ -129,9 +131,10 @@ impl Router{
             interface_map: HashMap<String, Interface>,
             endpoints: Option<Vec<String>>,
             in_order: Option<bool>,
-            xsk_map_list: Arc<Mutex<Vec<XskMap<MapData>>>>,
-            interface_xsk_map: Arc<Mutex<AyaHashMap<MapData, u32, u32>>>,
+            xsk_map: Arc<Mutex<XskMap<MapData>>>,
+            interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>,
             interface_config_map: Arc<Mutex<AyaHashMap<MapData, u32, InterfaceConfig>>>,
+            last_seq_map: Arc<Mutex<AyaHashMap<MapData, u8, u32>>>,
         ) -> Router {
             Router{
                 route_table: RouteTable{
@@ -140,9 +143,10 @@ impl Router{
                 interface_map,
                 endpoints,
                 in_order,
-                xsk_map_list,
-                interface_xsk_map,
+                xsk_map,
+                interface_queue_map,
                 interface_config_map,
+                last_seq_map,
             }
     }
     pub async fn run(&mut self, mut route_table: LpmTrie<MapData, u32, [RouteNextHop;32]>) -> anyhow::Result<()>{
@@ -191,17 +195,14 @@ impl Router{
         let interface_channel_map_mutex = Arc::new(Mutex::new(interface_channel_map));
 
         if self.in_order.is_some() && self.in_order.unwrap(){
-            let mut counter: usize = 0;
+            let ooo_buffer = BTreeMap::new();
+            let ooo_buffer_mutex = Arc::new(Mutex::new(ooo_buffer));
+            let mut intf_counter: u32 = 0;
             for (intf_name, intf) in &self.interface_map {
                 let mut flow_table = FlowTable::new();
                 info!("setting up afxdp for interface {}, index {}", intf_name, intf.idx.unwrap());
-                let interface_xsk_map = self.interface_xsk_map.clone();
-                let mut interface_xsk_map = interface_xsk_map.lock().unwrap();
-                interface_xsk_map.insert(intf.idx.unwrap(), counter as u32, 0)?;
-                let xsk_map_list = self.xsk_map_list.clone();
-                let mut xsk_map_list = xsk_map_list.lock().unwrap();
-                let xsk_map = xsk_map_list.get_mut(counter).unwrap();
-                let xsk_map_mutex = Arc::new(Mutex::new(xsk_map));
+                let xsk_map = Arc::clone(&self.xsk_map);
+                let interface_queue_map = Arc::clone(&self.interface_queue_map);
                 let interface_config_map = self.interface_config_map.clone();
                 let mut interface_config_map = interface_config_map.lock().unwrap();
                 let route_table = Arc::clone(&route_table_mutex);
@@ -212,56 +213,67 @@ impl Router{
                 let tx_queue_len = 8192;
                 let rx_cooldown = 10;
                 let mut af_xdp = AfXdp::new(intf.idx.unwrap(), intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
-                let (rx_channel, tx_channel) = af_xdp.setup(xsk_map_mutex, counter).unwrap();
+                let (rx_channel, tx_channel) = af_xdp.setup(xsk_map, interface_queue_map, intf_counter).unwrap();
+                let tx_channel_mutex = Arc::new(Mutex::new(tx_channel));
                 let mut interface_channel_map = interface_channel_map.lock().unwrap();
+                let last_seq_map = Arc::clone(&self.last_seq_map);
                 match intf.role{
                     Role::Access => {
                         info!("setting up tx for access interface {}", intf_name);
-                        interface_channel_map.insert(intf.idx.unwrap(), tx_channel);
+                        interface_channel_map.insert(intf.idx.unwrap(), tx_channel_mutex.clone());
                         interface_config_map.insert(intf.idx.unwrap(), InterfaceConfig{
                             role: 0,
+                            order: 0,
                         }, 0)?;
                     },
                     Role::Fabric => {
                         info!("setting up rx for fabric interface {}", intf_name);
                         interface_config_map.insert(intf.idx.unwrap(), InterfaceConfig{
                             role: 1,
+                            order: 1,
                         }, 0)?;
+                        let ooo_buffer = Arc::clone(&ooo_buffer_mutex);
                         let rx_f = move |queue: &mut rx::Queue<'_, WithCooldown<Arc<AsyncFd<afxdp_socket::Fd>>>>| {
-                            queue.for_each(|mut _header, payload| {
+                            info!("received packet");
+                            queue.for_each(|mut _header, payload| {   
+                                let data_ptr = payload.as_ptr() as usize;        
+                                let bth_hdr = data_ptr as *const BthHdr;
+                                let seq_num = {
+                                    let seq_num = unsafe { (*bth_hdr).psn_seq };
+                                    u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]])
+                                };
+                                let mut ooo_buffer = ooo_buffer.lock().unwrap();
+                                info!("received packet, seq_num: {}", seq_num);
+                                ooo_buffer.insert(seq_num, (_header, payload.to_vec()));
+                            });
+                            
+                            let mut ooo_buffer = ooo_buffer.lock().unwrap();
+                            ooo_buffer.retain(|&seq, (_header, payload)| {
                                 _header.path.swap();
-                                let dst_prefix = match _header.path.remote_address.ip{
-                                    ip::IpAddress::Ipv4(ipv4) => {
-                                        let slice: &[u8;4] = ipv4.as_bytes().try_into().unwrap();
-                                        u32::from_be_bytes(*slice).to_be()
-                                    },
-                                    _ => {
-                                        panic!("IPv6 not supported");
-                                    },
+
+                                let to_u32 = |address: IpAddress | {
+                                    match address {
+                                        IpAddress::Ipv4(ipv4) => {
+                                            let slice: &[u8;4] = ipv4.as_bytes().try_into().unwrap();
+                                            u32::from_be_bytes(*slice).to_be()
+                                        },
+                                        _ => {
+                                            panic!("IPv6 not supported");
+                                        },
+                                    }
                                 };
-                                let src_prefix = match _header.path.local_address.ip{
-                                    ip::IpAddress::Ipv4(ipv4) => {
-                                        let slice: &[u8;4] = ipv4.as_bytes().try_into().unwrap();
-                                        u32::from_be_bytes(*slice).to_be()
-                                    },
-                                    _ => {
-                                        panic!("IPv6 not supported");
-                                    },
-                                };
-
-                                let dst_port = _header.path.remote_address.port;
-
-                                let src_port = _header.path.local_address.port;
-
+    
                                 let flow_key = FlowKey{
-                                    src_ip: src_prefix,
-                                    dst_ip: dst_prefix,
-                                    src_port,
-                                    dst_port,
+                                    src_ip: to_u32(_header.path.local_address.ip),
+                                    dst_ip: to_u32(_header.path.remote_address.ip),
+                                    src_port: _header.path.local_address.port,
+                                    dst_port: _header.path.remote_address.port,
                                 };
-                                let if_idx = if let Some(if_idx) = flow_table.get(&flow_key) {
-                                    if_idx.clone()
+                                let tx_channel = if let Some(tx_channel) = flow_table.get(&flow_key) {
+                                    info!("found tx_channel in flow_table");
+                                    tx_channel.clone()
                                 } else {
+                                    info!("tx_channel not found in flow_table");
                                     let prefix_len = 32;
                                     let key = Key::new(prefix_len, prefix);
                                     let route_table = route_table.lock().unwrap();
@@ -273,28 +285,45 @@ impl Router{
                                         }
                                     }
                                     if let Some(if_idx) = if_idx {
-                                        flow_table.insert(flow_key, if_idx);
-                                        if_idx
+                                        let interface_channel_map = interface_channel_map_mutex.lock().unwrap();
+                                        let tx_channel = interface_channel_map.get(&if_idx).unwrap();
+                                        flow_table.insert(flow_key, tx_channel.clone());
+                                        tx_channel.clone()
                                     } else {
                                         panic!("route not found for u32 prefix {}/32", prefix);
                                     }
                                 };
-
-                                let mut interface_channel_map = interface_channel_map_mutex.lock().unwrap();
-                                let tx_channel = interface_channel_map.get_mut(&if_idx).unwrap();
-                                //info!("sending packet {:#?}", _header.path);
-                                let packet = afxdp::Packet{
-                                    path: _header.path,
-                                    ecn: _header.ecn,
-                                    counter: 0,
-                                    data: payload.to_vec(),
+                                let last_seq_map = Arc::clone(&last_seq_map);
+                                let mut last_seq_map = last_seq_map.lock().unwrap();
+                                let mut last_seq = match last_seq_map.get(&0, 0){
+                                    Ok(res) => {
+                                        res
+                                    },
+                                    Err(e) => {
+                                        panic!("error getting last seq: {:?}", e);
+                                    }
                                 };
-                                tx_channel.queue(|queue| {
-                                    //info!("sending packet");
-                                    queue.push(packet.clone()).unwrap();
-                                });
-
+                                info!("seq: {}, last_seq: {}", seq, last_seq);
+                                if last_seq + 1 == seq {
+                                    last_seq = seq;
+                                    let packet = afxdp::Packet{
+                                        path: _header.path,
+                                        ecn: _header.ecn,
+                                        counter: 0,
+                                        data: payload.to_vec(),
+                                    };
+                                    let mut tx_channel = tx_channel.lock().unwrap();
+                                    tx_channel.queue(|queue| {
+                                        info!("sending packet");
+                                        queue.push(packet.clone()).unwrap();
+                                    });
+                                    last_seq_map.insert(0, last_seq, 0).unwrap();
+                                    false
+                                } else {
+                                    true
+                                }
                             });
+                            info!("done processing packets");
                         };
                         let jh = tokio::spawn( async move{
                             af_xdp.recv(rx_channel, rx_f.clone()).await;
@@ -303,7 +332,7 @@ impl Router{
                         jh_list.push(jh);
                     }
                 }
-                counter += 1;
+                intf_counter += 1;
             }
         }
         if !jh_list.is_empty(){

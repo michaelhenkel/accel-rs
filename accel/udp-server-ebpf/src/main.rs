@@ -17,7 +17,7 @@ use network_types::{
 };
 use common::{
     ptr_at, Stats,
-    FlowKey, FlowNextHop, RouteNextHop,
+    InterfaceQueue,
     //STATS_MAP_NAME, FLOW_TABLE_NAME,
 };
 
@@ -27,6 +27,10 @@ static mut STATSMAP: HashMap<u32, Stats> =
 
 #[map(name = "XSKMAP")]
 static XSKMAP: XskMap = XskMap::with_max_entries(8, 0);
+
+#[map(name = "INTERFACEQUEUEMAP")]
+static INTERFACEQUEUEMAP: HashMap<InterfaceQueue, u32> =
+    HashMap::<InterfaceQueue, u32>::with_max_entries(100, 0);
 
 #[xdp]
 pub fn udp_server(ctx: XdpContext) -> u32 {
@@ -55,14 +59,27 @@ fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
     }
     let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
     let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+
+    let interface_queue = InterfaceQueue{
+        ifidx: if_idx,
+        queue: queue_idx,
+    };
+    let queue_idx = match unsafe { INTERFACEQUEUEMAP.get(&interface_queue )}{
+        Some(queue_idx) => {
+            queue_idx
+        },
+        None => {
+            return Ok(xdp_action::XDP_DROP)
+        },
+    };
     let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
     unsafe { (*statsmap).rx += 1 };
-    match XSKMAP.redirect(queue_idx, xdp_action::XDP_DROP as u64){
+    match XSKMAP.redirect(*queue_idx, xdp_action::XDP_DROP as u64){
         Ok(res) => {
             Ok(res)
         },
         Err(e) => {
-            info!(&ctx, "error redirecting to queue {}: {}", queue_idx, e);
+            info!(&ctx, "error redirecting to queue {}: {}", *queue_idx, e);
             return Ok(xdp_action::XDP_ABORTED);
         }
     }

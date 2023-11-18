@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use aya::{include_bytes_aligned, Bpf, maps::{LpmTrie, MapData, XskMap, HashMap as AyaHashMap}};
 use cli_server::StatsMsg;
-use common::RouteNextHop;
+use common::InterfaceQueue;
 use log::info;
 use tokio::task::JoinHandle;
 use crate::handler::handler::{self, StatsHandler};
@@ -40,13 +40,18 @@ impl handler::ProgramHandler for UdpServerHandler{
             panic!("XSKMAP map not found");
         };
 
-        let mut xsk_map_list = Vec::new();
-        xsk_map_list.push(xsk_map);
+        let xsk_map = Arc::new(Mutex::new(xsk_map));
 
-        let xsk_map_list_mutex = Arc::new(Mutex::new(xsk_map_list));
+        let interface_queue_map = if let Some(interface_queue_map) = bpf.take_map("INTERFACEQUEUEMAP") {
+            AyaHashMap::try_from(interface_queue_map)?
+        } else {
+            panic!("INTERFACEQUEUEMAP map not found");
+        };
+
+        let interface_queue_map_mutex = Arc::new(Mutex::new(interface_queue_map));
 
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let udp_s = UdpServer::new(interface_map.clone(), xsk_map_list_mutex);
+        let udp_s = UdpServer::new(interface_map.clone(), xsk_map, interface_queue_map_mutex);
         let udp_server_jh = tokio::spawn(async move {
             if let Err(e) = udp_s.run(rx).await{
                 return Err(e);

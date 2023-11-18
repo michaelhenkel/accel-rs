@@ -54,10 +54,21 @@ pub struct FlowNextHop {
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for FlowNextHop {}
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InterfaceQueue {
+    pub ifidx: u32,
+    pub queue: u32,
+}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for InterfaceQueue {}
+
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone)]
 pub struct InterfaceConfig{
     pub role: u8,
+    pub order: u8,
 }
 
 #[cfg(feature = "user")]

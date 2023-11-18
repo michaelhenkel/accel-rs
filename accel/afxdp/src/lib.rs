@@ -1,7 +1,7 @@
 use std::{sync::{Arc, Mutex}, ffi::CString, os::fd::AsRawFd, hash::Hasher};
 use std::hash::Hash;
 use core::time::Duration;
-use aya::maps::{XskMap, MapData};
+use aya::maps::{XskMap, MapData, HashMap as AyaHashMap};
 use log::info;
 use s2n_quic::provider::io::xdp::tx::{Error,PayloadBuffer, Message};
 use s2n_quic_xdp::{
@@ -26,6 +26,7 @@ use s2n_quic_core::{
     inet::ExplicitCongestionNotification,
 };
 use tokio::io::unix::AsyncFd;
+use common::InterfaceQueue;
 
 #[derive(Clone)]
 pub struct AfXdp{
@@ -76,7 +77,7 @@ impl AfXdp {
             queue_ids,
         }
     }
-    pub fn setup(&mut self, xsk_map: Arc<Mutex<&mut XskMap<MapData>>>, map_idx: usize) -> anyhow::Result<(
+    pub fn setup(&mut self, xsk_map: Arc<Mutex<XskMap<MapData>>>, interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>, intf_counter: u32) -> anyhow::Result<(
         rx::Rx<WithCooldown<Arc<AsyncFd<socket::Fd>>>>,
         tx::Tx<tx::BusyPoll>,
     )>{
@@ -163,12 +164,16 @@ impl AfXdp {
             // finally bind the socket to the configured address
             syscall::bind(&socket, &mut address)?;
         }
-
         for (rx_fd, fd) in rx_fds {
+            let interface_queue = InterfaceQueue{
+                ifidx: self.ifidx,
+                queue: *rx_fd,
+            };
+            let mut interface_queue_map = interface_queue_map.lock().unwrap();
+            interface_queue_map.insert(interface_queue, intf_counter, 0)?;
             let mut xsk_map = xsk_map.lock().unwrap();
-            xsk_map.set(*rx_fd, fd, 0)?;
-            info!("added queue {} to xsk_map at idx {} for intf {} with idx {}", rx_fd, map_idx, self.ifidx, self.interface.clone());
-
+            xsk_map.set(intf_counter, fd, 0)?;
+            info!("added socket for if/queue {}/{} with idx {}", self.ifidx, rx_fd, intf_counter);
         }
         // make sure we've allocated all descriptors from the UMEM to a queue
         assert_eq!(desc.count(), 0, "descriptors have been leaked");

@@ -15,7 +15,7 @@ use network_types::{
     udp::UdpHdr,
 };
 use common::{
-    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop, BthHdr, InterfaceConfig
+    ptr_at, Stats, FlowKey, FlowNextHop, RouteNextHop, BthHdr, InterfaceConfig, InterfaceQueue
 };
 
 #[map(name = "STATSMAP")]
@@ -41,24 +41,10 @@ static mut ROUTETABLE: LpmTrie<u32, [RouteNextHop;32]> =
 #[map(name = "XSKMAP")]
 static XSKMAP: XskMap = XskMap::with_max_entries(2048, 0);
 
-#[map(name = "XSKMAP1")]
-static XSKMAP1: XskMap = XskMap::with_max_entries(8, 0);
 
-#[map(name = "XSKMAP2")]
-static XSKMAP2: XskMap = XskMap::with_max_entries(8, 0);
-
-#[map(name = "XSKMAP3")]
-static XSKMAP3: XskMap = XskMap::with_max_entries(8, 0);
-
-#[map(name = "XSKMAP4")]
-static XSKMAP4: XskMap = XskMap::with_max_entries(8, 0);
-
-#[map(name = "XSKMAP5")]
-static XSKMAP5: XskMap = XskMap::with_max_entries(8, 0);
-
-#[map(name = "INTERFACEXSKMAP")]
-static INTERFACEXSKMAP: HashMap<u32, u32> =
-    HashMap::<u32, u32>::with_max_entries(5, 0);
+#[map(name = "INTERFACEQUEUEMAP")]
+static INTERFACEQUEUEMAP: HashMap<InterfaceQueue, u32> =
+    HashMap::<InterfaceQueue, u32>::with_max_entries(100, 0);
 
 #[map(name = "INTERFACECONFIGMAP")]
 static INTERFACECONFIGMAP: HashMap<u32, InterfaceConfig> =
@@ -119,23 +105,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
     let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
     unsafe { (*statsmap).rx += 1 };
-    let last_seq = match unsafe { LASTSEQ.get_ptr_mut(&0) }{
-        Some(seq_num) => seq_num,
-        None => {
-            unsafe { LASTSEQ.insert(&0, &0, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
-            unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
-        }
-    };
 
-    let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
-    let seq_num = unsafe { (*bth_hdr).psn_seq };
-    let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
-    if unsafe { *last_seq } > 0 {
-        if seq_num != unsafe { *last_seq + 1 } {
-            unsafe { (*statsmap).ooo += 1 };
-        }
-    } else {}
-    unsafe { *last_seq = seq_num };
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
@@ -158,6 +128,40 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             return Ok(res as u32)
         },
     };
+    
+    let last_seq = match unsafe { LASTSEQ.get_ptr_mut(&0) }{
+        Some(seq_num) => seq_num,
+        None => {
+            unsafe { LASTSEQ.insert(&0, &0, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
+            unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
+        }
+    };
+
+    let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
+    let seq_num = unsafe { (*bth_hdr).psn_seq };
+    let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
+    //info!(&ctx, "got seq_num: {} on if_idx {}", seq_num, if_idx);
+    //let ooo = if unsafe { *last_seq } > 0 {
+    let ooo = if seq_num != unsafe { *last_seq + 1 } {
+            info!(&ctx, "expected seq {}, got seq {} on if_idx {}", unsafe { *last_seq + 1 }, seq_num, if_idx);
+            unsafe { (*statsmap).ooo += 1 };
+            true
+        } else {
+            unsafe { *last_seq = seq_num };
+            false
+        };
+    //} else {
+    //    unsafe { *last_seq = seq_num };
+    //    false
+    //};
+
+    if !ooo{
+        info!(&ctx, "sending inorder");
+        let res = unsafe { bpf_redirect(if_idx, 0)};
+        return Ok(res as u32)
+    }
+
+    info!(&ctx, "packets out of order seq {}, last_seq {} on if_idx {}, redirecting to xskmap", seq_num, unsafe { *last_seq }, if_idx);
 
     match role{
         Role::Access => {
@@ -165,28 +169,20 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             return Ok(res as u32)
         },
         Role::Fabric => {
-            let xsk_map = match unsafe { INTERFACEXSKMAP.get(&local_if_idx )}{
-                Some(idx) => {
-                    if *idx == 0 {
-                        &XSKMAP1
-                    } else if *idx == 1 {
-                        &XSKMAP2
-                    } else if *idx == 2 {
-                        &XSKMAP3
-                    } else if *idx == 3 {
-                        &XSKMAP4
-                    } else if *idx == 4 {
-                        &XSKMAP5
-                    } else {
-                        return Ok(xdp_action::XDP_DROP)
-                    }
+            let interface_queue = InterfaceQueue{
+                ifidx: local_if_idx,
+                queue: queue_idx,
+            };
+            let queue_idx = match unsafe { INTERFACEQUEUEMAP.get(&interface_queue )}{
+                Some(queue_idx) => {
+                    queue_idx
                 },
                 None => {
                     return Ok(xdp_action::XDP_DROP)
                 },
             };
         
-            match xsk_map.redirect(queue_idx, xdp_action::XDP_DROP as u64){
+            match XSKMAP.redirect(*queue_idx, xdp_action::XDP_DROP as u64){
                 Ok(res) => {
                     return Ok(res)
                 },
