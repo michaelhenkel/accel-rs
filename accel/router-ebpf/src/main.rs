@@ -112,6 +112,28 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     let local_if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
     let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
 
+    let last_seq = match unsafe { LASTSEQ.get_ptr_mut(&0) }{
+        Some(seq_num) => seq_num,
+        None => {
+            unsafe { LASTSEQ.insert(&0, &0, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
+            unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
+        }
+    };
+
+    let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
+    let seq_num = unsafe { (*bth_hdr).psn_seq };
+    let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
+    //info!(&ctx, "got seq_num: {} on if_idx {}", seq_num, if_idx);
+    //let ooo = if unsafe { *last_seq } > 0 {
+    let ooo = if seq_num != unsafe { *last_seq + 1 } {
+            //info!(&ctx, "expected seq {}, got seq {} on if_idx {}", unsafe { *last_seq + 1 }, seq_num, if_idx);
+            unsafe { (*statsmap).ooo += 1 };
+            true
+        } else {
+            unsafe { *last_seq = seq_num };
+            false
+        };
+
     let role = match unsafe { INTERFACECONFIGMAP.get(&local_if_idx)} {
         Some(interface_config) => {
             if interface_config.role == 0 {
@@ -129,39 +151,19 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         },
     };
     
-    let last_seq = match unsafe { LASTSEQ.get_ptr_mut(&0) }{
-        Some(seq_num) => seq_num,
-        None => {
-            unsafe { LASTSEQ.insert(&0, &0, 0) }.map_err(|_| xdp_action::XDP_ABORTED)?;
-            unsafe { LASTSEQ.get_ptr_mut(&0).ok_or(xdp_action::XDP_ABORTED)? }
-        }
-    };
 
-    let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
-    let seq_num = unsafe { (*bth_hdr).psn_seq };
-    let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
-    //info!(&ctx, "got seq_num: {} on if_idx {}", seq_num, if_idx);
-    //let ooo = if unsafe { *last_seq } > 0 {
-    let ooo = if seq_num != unsafe { *last_seq + 1 } {
-            info!(&ctx, "expected seq {}, got seq {} on if_idx {}", unsafe { *last_seq + 1 }, seq_num, if_idx);
-            unsafe { (*statsmap).ooo += 1 };
-            true
-        } else {
-            unsafe { *last_seq = seq_num };
-            false
-        };
     //} else {
     //    unsafe { *last_seq = seq_num };
     //    false
     //};
 
     if !ooo{
-        info!(&ctx, "sending inorder");
+        //info!(&ctx, "sending inorder");
         let res = unsafe { bpf_redirect(if_idx, 0)};
         return Ok(res as u32)
     }
 
-    info!(&ctx, "packets out of order seq {}, last_seq {} on if_idx {}, redirecting to xskmap", seq_num, unsafe { *last_seq }, if_idx);
+    //info!(&ctx, "packets out of order seq {}, last_seq {} on if_idx {}, redirecting to xskmap", seq_num, unsafe { *last_seq }, if_idx);
 
     match role{
         Role::Access => {

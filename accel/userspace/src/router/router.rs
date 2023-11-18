@@ -234,7 +234,6 @@ impl Router{
                         }, 0)?;
                         let ooo_buffer = Arc::clone(&ooo_buffer_mutex);
                         let rx_f = move |queue: &mut rx::Queue<'_, WithCooldown<Arc<AsyncFd<afxdp_socket::Fd>>>>| {
-                            info!("received packet");
                             queue.for_each(|mut _header, payload| {   
                                 let data_ptr = payload.as_ptr() as usize;        
                                 let bth_hdr = data_ptr as *const BthHdr;
@@ -243,10 +242,9 @@ impl Router{
                                     u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]])
                                 };
                                 let mut ooo_buffer = ooo_buffer.lock().unwrap();
-                                info!("received packet, seq_num: {}", seq_num);
                                 ooo_buffer.insert(seq_num, (_header, payload.to_vec()));
                             });
-                            
+
                             let mut ooo_buffer = ooo_buffer.lock().unwrap();
                             ooo_buffer.retain(|&seq, (_header, payload)| {
                                 _header.path.swap();
@@ -270,10 +268,8 @@ impl Router{
                                     dst_port: _header.path.remote_address.port,
                                 };
                                 let tx_channel = if let Some(tx_channel) = flow_table.get(&flow_key) {
-                                    info!("found tx_channel in flow_table");
                                     tx_channel.clone()
                                 } else {
-                                    info!("tx_channel not found in flow_table");
                                     let prefix_len = 32;
                                     let key = Key::new(prefix_len, prefix);
                                     let route_table = route_table.lock().unwrap();
@@ -303,7 +299,6 @@ impl Router{
                                         panic!("error getting last seq: {:?}", e);
                                     }
                                 };
-                                info!("seq: {}, last_seq: {}", seq, last_seq);
                                 if last_seq + 1 == seq {
                                     last_seq = seq;
                                     let packet = afxdp::Packet{
@@ -314,7 +309,6 @@ impl Router{
                                     };
                                     let mut tx_channel = tx_channel.lock().unwrap();
                                     tx_channel.queue(|queue| {
-                                        info!("sending packet");
                                         queue.push(packet.clone()).unwrap();
                                     });
                                     last_seq_map.insert(0, last_seq, 0).unwrap();
@@ -323,7 +317,6 @@ impl Router{
                                     true
                                 }
                             });
-                            info!("done processing packets");
                         };
                         let jh = tokio::spawn( async move{
                             af_xdp.recv(rx_channel, rx_f.clone()).await;

@@ -29,7 +29,7 @@ pub enum Role{
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadBalancer{
-    pub flowlet_size: u8,
+    pub flowlet_size: u32,
 }
 
 
