@@ -1,3 +1,5 @@
+use clap::builder::ValueParserFactory;
+use log::info;
 use tokio::net::UdpSocket;
 use std::net::SocketAddr;
 use clap::Parser;
@@ -48,7 +50,23 @@ struct Opt {
     packet_size: usize,
     #[clap(long, default_value = "false")]
     xctrl: bool,
+    #[clap(long, value_parser = parse_packet_delay)]
+    delay: Option<PacketDelay>,
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct PacketDelay(u32,u32);
+
+fn parse_packet_delay(s: &str) -> Result<PacketDelay, anyhow::Error> {
+    let mut split = s.split(',');
+    let first = split.next().ok_or(anyhow::anyhow!("missing first value"))?;
+    let first = first.parse::<u32>()?;
+    let second = split.next().ok_or(anyhow::anyhow!("missing second value"))?;
+    let second = second.parse::<u32>()?;
+    Ok(PacketDelay(first, second))
+}
+
+
 
 fn read_yaml_file(file_path: &str) -> Result<Vec<Message>, anyhow::Error> {
     let mut file = File::open(file_path)?;
@@ -158,11 +176,12 @@ async fn send_ctrl(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32, sta
 
 }
 
-async fn send_messages(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32, start: u32, packet_size: usize) -> anyhow::Result<()>{
+async fn send_messages(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32, start: u32, packet_size: usize, packet_delay: Option<PacketDelay>) -> anyhow::Result<()>{
     let mut seq_counter = start;
     let tot_seq = messages * packets;
     let mut num_seq_counter = 0;
     for _i in 0..messages{
+        let mut packet_counter = 0;
         let mut sequence = Vec::new();
         for j in 0..packets{
             num_seq_counter += 1;
@@ -196,7 +215,14 @@ async fn send_messages(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32,
             let c = c.as_slice();
             b.extend_from_slice(c);
             let b = b.as_slice();
+            if let Some(packet_delay) = packet_delay{
+                if packet_counter % packet_delay.0 == 0{
+                    println!("packet {}, sleeping for {} microseconds", packet_counter, packet_delay.1);
+                    tokio::time::sleep(tokio::time::Duration::from_micros(packet_delay.1 as u64)).await;
+                }
+            }
             let _len = sock.send(b).await?;
+            packet_counter += 1;
         }
     }
     Ok(())
@@ -204,6 +230,8 @@ async fn send_messages(sock: &UdpSocket, messages: u32, packets: u32, qpid: u32,
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()>{
+    println!("starting udp client");
+    println!("bla");
     let opt = Opt::parse();
     let ip = get_ip_address_from_interface(&opt.iface)?;
     let data_ip_port = format!("{}:{}", ip.to_string(), random_src_port());  
@@ -217,12 +245,14 @@ async fn main() -> anyhow::Result<()>{
     let remote_ctrl_addr = ctrl_addr.parse::<SocketAddr>()?;
     ctrl_sock.connect(remote_ctrl_addr).await?;
     data_sock.connect(remote_data_addr).await?;
+    println!("connected to {} and {}", data_addr, ctrl_addr);
     if opt.messages.is_some() && opt.packets.is_some() && opt.qpid.is_some() && opt.start.is_some(){
         if opt.xctrl{
             send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 0).await?;
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
-        send_messages(&data_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size).await?;
+        println!("sending messages");
+        send_messages(&data_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, opt.delay).await?;
         if opt.xctrl{
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             send_ctrl(&ctrl_sock, opt.messages.unwrap(), opt.packets.unwrap(), opt.qpid.unwrap(), opt.start.unwrap(), packet_size, 1).await?;
