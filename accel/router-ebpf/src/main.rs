@@ -109,7 +109,6 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     let udp_hdr = ptr_at::<UdpHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)
         .ok_or(xdp_action::XDP_ABORTED)?;
     if u16::from_be(unsafe { (*udp_hdr).dest }) != 4791 && u16::from_be(unsafe { (*udp_hdr).dest }) != 4792{
-        warn!(&ctx, "received UDP packet with dest port {}", u16::from_be(unsafe { (*udp_hdr).dest }));
         return Ok(xdp_action::XDP_PASS);
     }
     let flow_next_hop = if let Some((flow_next_hop, flow_key)) = get_v4_next_hop_from_flow_table(&ctx){
@@ -140,37 +139,38 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
     let if_idx = flow_next_hop.ifidx;
+
     let local_if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
     let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
     let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
     let dest_qp = unsafe { (*bth_hdr).dest_qpn };
     let dest_qp_dec = u32::from_be_bytes([0, dest_qp[0], dest_qp[1], dest_qp[2]]);
     if dest_qp_dec == 0 || dest_qp_dec == 1 {
-        info!(&ctx, "cm mgmt packet");
+        //info!(&ctx, "cm mgmt packet");
         let mad_hdr = ptr_at::<MadHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
         let cm = match u16::to_be(unsafe{ (*mad_hdr).attribute_id }){
             16 => { 
-                info!(&ctx, "cm connect request packet");
+                //info!(&ctx, "cm connect request packet");
                 let connect_request_hdr = ptr_at::<CmConnectRequest>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
                 Cm::ConnectRequest(connect_request_hdr)
             },
             19 => { 
-                info!(&ctx, "cm connect reply packet");
+                //info!(&ctx, "cm connect reply packet");
                 let connect_reply_hdr = ptr_at::<CmConnectReply>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
                 Cm::ConnectReply(connect_reply_hdr)
             },
             20 => { 
-                info!(&ctx, "cm ready to use packet");
+                //info!(&ctx, "cm ready to use packet");
                 let ready_to_use_hdr = ptr_at::<CmReadyToUse>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
                 Cm::ReadyToUse(ready_to_use_hdr)
             },
             21 => {
-                info!(&ctx, "cm disconnect request packet");
+                //info!(&ctx, "cm disconnect request packet");
                 let disconnect_req_hdr = ptr_at::<CmDisconnectRequest>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
                 Cm::DisconnectRequest(disconnect_req_hdr)
             },
             22 => {
-                info!(&ctx, "cm disconnect reply packet");
+                //info!(&ctx, "cm disconnect reply packet");
                 let disconnect_repl_hdr = ptr_at::<CmDisconnectReply>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
                 Cm::DisconnectReply(disconnect_repl_hdr)
             },
@@ -189,7 +189,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                     Some(_) => { 
                     },
                     None => {
-                        info!(&ctx, "cm connect request, setting cm_state, transaction_id {}", transaction_id_dec);
+                        //info!(&ctx, "cm connect request, setting cm_state, transaction_id {}", transaction_id_dec);
                         let starting_psn = unsafe { (*conn_req).starting_psn };
                         let starting_psn = u32::from_be_bytes([0, starting_psn[0], starting_psn[1], starting_psn[2]]);
                         let cm_state = CmState{
@@ -214,7 +214,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                         let starting_psn = u32::from_be_bytes([0, starting_psn[0], starting_psn[1], starting_psn[2]]);
                         unsafe { (*cm_state).first_psn = starting_psn };
                         unsafe { (*cm_state).last_psn = starting_psn-1 };
-                        info!(&ctx, "connect reply, setting first_psn {}, last_psn {} for qp_id {}", unsafe { (*cm_state).first_psn }, unsafe { (*cm_state).last_psn }, local_qpn_dec);
+                        //info!(&ctx, "connect reply, setting first_psn {}, last_psn {} for qp_id {}", unsafe { (*cm_state).first_psn }, unsafe { (*cm_state).last_psn }, local_qpn_dec);
                     },
                     None => {}
                 }
@@ -233,7 +233,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                             in_order: 1,
                         };
                         QPSTATE.insert(&qp_id, &qp_state, 0).map_err(|_| xdp_action::XDP_ABORTED)?;
-                        info!(&ctx, "ready to use, setting first_psn {}, last_psn {} for qp_id {}", unsafe { (*cm_state).first_psn }, unsafe { (*cm_state).last_psn }, qp_id_dec);
+                        //info!(&ctx, "ready to use, setting first_psn {}, last_psn {} for qp_id {}", unsafe { (*cm_state).first_psn }, unsafe { (*cm_state).last_psn }, qp_id_dec);
                     },
                     None => {}
                 }
@@ -241,18 +241,18 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             Cm::DisconnectRequest(_disconnect_req) => {
                 match cm_state {
                     Some(cm_state) => { 
-                        info!(&ctx, "disconnect request, setting state to 3 for qp_id {}", transaction_id_dec);
+                        //info!(&ctx, "disconnect request, setting state to 3 for qp_id {}", transaction_id_dec);
                         unsafe { (*cm_state).state = 3 };
                     },
                     None => {
-                        info!(&ctx,"disconnect request, cm_state not found for transaction_id {}", transaction_id_dec)
+                        //info!(&ctx,"disconnect request, cm_state not found for transaction_id {}", transaction_id_dec)
                     }
                 }
             },
             Cm::DisconnectReply(_disconnect_repl) => {
                 let qp_id = match cm_state {
                     Some(cm_state) => {
-                        info!(&ctx, "disconnect reply, removing cm_state for transaction_id {}", transaction_id_dec);
+                        //info!(&ctx, "disconnect reply, removing cm_state for transaction_id {}", transaction_id_dec);
                         unsafe { (*cm_state).qp_id }
                     },
                     None => { [0,0,0] }
@@ -260,18 +260,18 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                 let qp_id_dec = u32::from_be_bytes([0, qp_id[0], qp_id[1], qp_id[2]]);
                 match QPSTATE.remove(&qp_id){
                     Ok(()) => {
-                        info!(&ctx, "qp_state removed for qp_id {}", qp_id_dec);
+                        //info!(&ctx, "qp_state removed for qp_id {}", qp_id_dec);
                     },
                     Err(_) => {
-                        info!(&ctx, "qp_state not found for qp_id {}", qp_id_dec);
+                        //info!(&ctx, "qp_state not found for qp_id {}", qp_id_dec);
                     }
                 }
                 match CMSTATE.remove(&transaction_id){
                     Ok(()) => {
-                        info!(&ctx, "cm_state removed for transaction_id {}", transaction_id_dec);
+                        //info!(&ctx, "cm_state removed for transaction_id {}", transaction_id_dec);
                     },
                     Err(_) => {
-                        info!(&ctx, "cm_state not found for transaction_id {}", transaction_id_dec);
+                        //info!(&ctx, "cm_state not found for transaction_id {}", transaction_id_dec);
                     }
                 }
             },
@@ -286,7 +286,6 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         let res = unsafe { bpf_redirect(if_idx, 0)};
         return Ok(res as u32)
     }
-    
 
     let seq_num = unsafe { (*bth_hdr).psn_seq };
     let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
@@ -303,15 +302,17 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         },
     };
 
-    let ooo = if seq_num != unsafe { (*qp_state).last_psn + 1 } {
-            info!(&ctx, "out of order seq {}, expected {}", seq_num, unsafe { (*qp_state).last_psn + 1 });
-            unsafe { (*statsmap).ooo += 1 };
-            true
-        } else {
-            info!(&ctx, "in order seq {}, expected {}", seq_num, unsafe { (*qp_state).last_psn + 1 });
-            unsafe { (*qp_state).last_psn = seq_num };
-            false
-        };
+
+
+    if seq_num != unsafe { (*qp_state).last_psn + 1 } {
+        //info!(&ctx, "out of order seq {}, expected {}", seq_num, unsafe { (*qp_state).last_psn + 1 });
+        unsafe { (*statsmap).ooo += 1 };
+    } else {
+        //info!(&ctx, "in order seq {}, expected {}", seq_num, unsafe { (*qp_state).last_psn + 1 });
+        unsafe { (*qp_state).last_psn = seq_num };
+        let res = unsafe { bpf_redirect(if_idx, 0)};
+        return Ok(res as u32)
+    }
 
     let role = match unsafe { INTERFACECONFIGMAP.get(&local_if_idx)} {
         Some(interface_config) => {
@@ -330,12 +331,10 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         },
     };
 
-    if !ooo{
-        let res = unsafe { bpf_redirect(if_idx, 0)};
-        return Ok(res as u32)
-    }
+    //let res = unsafe { bpf_redirect(if_idx, 0)};
+    //return Ok(res as u32);
 
-    unsafe { (*qp_state).in_order = 0 };
+    
 
     //info!(&ctx, "packets out of order seq {}, last_seq {} on if_idx {}, redirecting to xskmap", seq_num, unsafe { *last_seq }, if_idx);
 
