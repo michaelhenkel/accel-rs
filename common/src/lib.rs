@@ -166,6 +166,8 @@ pub struct CmConnectReply{
     pub target_ack_delay: u8,
     pub rnr_retry_count: u8,
     pub local_ca_guid: [u8;8],
+    pub private_data_1: [u32;32],
+    pub private_data_2: [u32;17],
 }
 
 impl CmConnectReply {
@@ -177,6 +179,9 @@ impl CmConnectReply {
 pub struct CmReadyToUse{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
+    pub private_data_1: [u32;32],
+    pub private_data_2: [u32;24],
+
 }
 
 impl CmReadyToUse {

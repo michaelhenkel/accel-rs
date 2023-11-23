@@ -8,7 +8,7 @@ use common::{
     CmReadyToUse,
     CmDisconnectReply,
     CmDisconnectRequest,
-    MadHdr, DethHdr,
+    MadHdr, DethHdr, InvariantCrc,
 };
 use log::info;
 use rand::distributions::{Standard, Distribution};
@@ -135,21 +135,55 @@ impl UdpServer{
                 queue.for_each(|mut _header, payload| {
                     info!("received packet");
                     let data_ptr = payload.as_ptr() as usize;
-                    let bth_hdr = data_ptr as *const BthHdr;     
+                    let bth_hdr = data_ptr as *const BthHdr;
+                    let op_code = u8::from_be(unsafe { (*bth_hdr).opcode });
+                    info!("received BTH packet with opcode {}", op_code);
                     let deth_hdr = (data_ptr + BthHdr::LEN) as *mut DethHdr;
                     let mad_hdr = (data_ptr + BthHdr::LEN + DethHdr::LEN) as *mut MadHdr;
                     let attribute_id = u16::from_be(unsafe { (*mad_hdr).attribute_id });
+                    info!("received MAD packet with attribute id {}", attribute_id);
                     if attribute_id == 0x0010 {
-                        unsafe { (*mad_hdr).attribute_id = u16::to_be(0x8013) };
-                        //let connection_request_hdr = (data_ptr + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN) as *const CmConnectRequest;
+
+                        let comm_request_hdr = (data_ptr + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN) as *mut CmConnectRequest;
+
+                        let mut new_bth_hdr = BthHdr::default();
+                        new_bth_hdr.dest_qpn = [0,0,1];
+                        new_bth_hdr.part_key = u16::to_be(65535);
+                        new_bth_hdr.opcode = u8::to_be(100);
+
+                        let mut new_deth_hdr = DethHdr::default();
+                        new_deth_hdr.queue_key = u32::to_be(0x0000000080010000);
+                        new_deth_hdr.src_qpn = [0,0,1];
+
+                        let mut new_mad_hdr = MadHdr::default();
+                        new_mad_hdr.base_version = u8::to_be(0x01);
+                        new_mad_hdr.mgmt_class = u8::to_be(0x07);
+                        new_mad_hdr.class_version = u8::to_be(0x02);
+                        new_mad_hdr.method = u8::to_be(0x03);
+                        new_mad_hdr.transaction_id = unsafe { (*mad_hdr).transaction_id };
+                        new_mad_hdr.attribute_id = u16::to_be(0x0013);
+
                         let mut connection_reply_hdr = CmConnectReply::default();
+                        connection_reply_hdr.local_comm_id = random_id();
+                        connection_reply_hdr.remote_comm_id = unsafe { (*comm_request_hdr).local_comm_id };
                         connection_reply_hdr.local_qpn = random_id();
                         connection_reply_hdr.starting_psn = random_id();
+                        let invariant_crc = InvariantCrc{
+                            crc: random_id(),
+                        };
+                        let local_port = _header.path.local_address.port;
+                        let remote_port = _header.path.remote_address.port;
+                        _header.path.local_address.port = remote_port;
+                        _header.path.remote_address.port = local_port;
+
+
+
                         let mut new_payload = Payload::new();
-                        new_payload.add(bth_hdr)
-                            .add(deth_hdr)
-                            .add(mad_hdr)
-                            .add(connection_reply_hdr);
+                        new_payload.add(new_bth_hdr)
+                            .add(new_deth_hdr)
+                            .add(new_mad_hdr)
+                            .add(connection_reply_hdr)
+                            .add(invariant_crc);
                         let packet = afxdp::Packet{
                             path: _header.path,
                             ecn: _header.ecn,

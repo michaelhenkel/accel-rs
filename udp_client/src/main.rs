@@ -1,6 +1,8 @@
 use clap::builder::ValueParserFactory;
 use log::info;
-use network_types::eth;
+use network_types::eth::{self, EthHdr};
+use network_types::ip::Ipv4Hdr;
+use network_types::udp::UdpHdr;
 use pnet::datalink::NetworkInterface;
 use pnet::ipnetwork::IpNetwork;
 use pnet::packet::Packet;
@@ -491,7 +493,7 @@ async fn main() -> anyhow::Result<()>{
             Err(e) => panic!("Error happened {}", e),
         };
         println!("creating connect_request");
-        let mut connect_request_packet = base_packet.build_connect_request();
+        let connect_request_packet = base_packet.build_connect_request();
         println!("sending connect_request");
         if let Some(res) = tx.send_to(connect_request_packet.as_slice(), None) {
             match res {
@@ -507,6 +509,46 @@ async fn main() -> anyhow::Result<()>{
         }
         println!("waiting for connect_reply");
 
+        let start = tokio::time::Instant::now();
+        let timeout = tokio::time::Duration::from_secs(2);
+
+        loop {
+            if start.elapsed() > timeout {
+                panic!("timeout");
+            }
+            let buf = rx.next().unwrap();
+            let bth_hdr = unsafe {
+                let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN] as *const u8 as *const BthHdr;
+                *ptr
+            };
+            let op_code = u8::from_be(bth_hdr.opcode);
+            let qpn = u32::from_be_bytes([0, bth_hdr.dest_qpn[0], bth_hdr.dest_qpn[1], bth_hdr.dest_qpn[2]]);
+            if op_code == 100 && qpn == 1 {
+                let mad_hdr = unsafe {
+                    let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN] as *const u8 as *const MadHdr;
+                    *ptr
+                };
+                let attribute_id = u16::from_be(mad_hdr.attribute_id);
+                if attribute_id == 0x0013 {
+                    let ready_to_use = base_packet.build_ready_to_use();
+                    println!("sending ready_to_use");
+                    if let Some(res) = tx.send_to(ready_to_use.as_slice(), None) {
+                        match res {
+                            Ok(_) => {
+                                info!("ready_to_use packet sent");
+                                break;
+                            },
+                            Err(e) => {
+                                panic!("failed to send ready_to_use: {:?}", e);
+                            }
+                        }
+                    } else {
+                        panic!("failed to send ready_to_use");
+                    }
+                }
+            }
+
+        }
 
         /* 
         let mut cm_handler = CmHandler::send_request(&data_sock, src_ipv4, dst_ipv4, src_port).await?;
@@ -710,19 +752,52 @@ impl MyPacket{
         b.to_vec()
     }
 
+    fn ready_to_use(&self) -> Vec<u8> {
+        let mut bth_hdr = BthHdr::default();
+        bth_hdr.opcode = u8::to_be(100);
+        bth_hdr.dest_qpn = [0,0,1];
+        let mut deth_hdr = DethHdr::default();
+        deth_hdr.src_qpn = [0,0,1];
+        let q_key: u32 = 0x0000000080010000;
+        deth_hdr.queue_key = u32::to_be(q_key);
+        let mut mad_hdr = MadHdr::default();
+        let tid: u64 = 0x0000000431544453;
+        let tid_as_u8 = tid.to_be_bytes();
+        mad_hdr.attribute_id = u16::to_be(0x0014);
+        mad_hdr.transaction_id = tid_as_u8;
+        mad_hdr.mgmt_class = u8::to_be(0x07);
+        mad_hdr.base_version = u8::to_be(0x01);
+        mad_hdr.class_version = u8::to_be(0x02);
+        mad_hdr.method = u8::to_be(0x03);
+        let ready_to_use_hdr = CmReadyToUse::default();
+        let invariant_crc = InvariantCrc{
+            crc: random_id(),
+        };
+        let mut buf = Buffer::new();
+        let b = buf.add(bth_hdr)
+            .add(deth_hdr)
+            .add(mad_hdr)
+            .add(ready_to_use_hdr)
+            .add(invariant_crc)
+            .as_slice();
+        b.to_vec()
+    }
+
     fn build_connect_request(&self) -> Vec<u8>{
-
-
         let mut buf = Vec::new();
         buf.extend_from_slice(self.ethernet_hdr().as_slice());
         buf.extend_from_slice(self.ip_hdr().as_slice());
         buf.extend_from_slice(self.udp_hdr().as_slice());
         buf.extend_from_slice(self.connect_request().as_slice());
+        buf
+    }
 
-        let mut ip_h = buf[0..20].to_vec();
-        let ip_hdr = ip_h.as_mut_slice();
-        let ip_packet = MutableIpv4Packet::new(ip_hdr).unwrap();
-        println!("ip packet x: {:#?}", ip_packet);
+    fn build_ready_to_use(&self) -> Vec<u8>{
+        let mut buf = Vec::new();
+        buf.extend_from_slice(self.ethernet_hdr().as_slice());
+        buf.extend_from_slice(self.ip_hdr().as_slice());
+        buf.extend_from_slice(self.udp_hdr().as_slice());
+        buf.extend_from_slice(self.ready_to_use().as_slice());
         buf
     }
 }
