@@ -17,3 +17,5 @@ netlink-packet-route = "0.17.1"
 log = "0.4.20"
 serde = { version = "1.0.188", features = ["derive"] }
 serde_yaml = "0.9.25"
+rtnetlink = "0.13.1"
+futures = "0.3.28"

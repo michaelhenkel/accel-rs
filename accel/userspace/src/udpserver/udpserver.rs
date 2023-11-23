@@ -1,7 +1,17 @@
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}};
 use aya::maps::{XskMap, MapData, HashMap as AyaHashMap};
-use common::{BthHdr, InterfaceQueue};
+use common::{
+    BthHdr,
+    InterfaceQueue,
+    CmConnectReply,
+    CmConnectRequest,
+    CmReadyToUse,
+    CmDisconnectReply,
+    CmDisconnectRequest,
+    MadHdr, DethHdr,
+};
 use log::info;
+use rand::distributions::{Standard, Distribution};
 use tokio::{
     task::JoinHandle,
     io::unix::AsyncFd,
@@ -119,49 +129,43 @@ impl UdpServer{
             let rx_cooldown = 10;
             let interface_queue_map = Arc::clone(&self.interface_queue_map);
             let mut af_xdp = AfXdp::new(intf.idx.unwrap(), intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
-            let (rx_channel, _tx_channel) = af_xdp.setup(xsk_map, interface_queue_map, 0).unwrap();
-            //let tx_channel_m = Arc::new(Mutex::new(tx_channel));
-
+            let (rx_channel, tx_channel) = af_xdp.setup(xsk_map, interface_queue_map, 0).unwrap();
+            let tx_channel = Arc::new(Mutex::new(tx_channel));
             let rx_f = move |queue: &mut rx::Queue<'_, WithCooldown<Arc<AsyncFd<afxdp_socket::Fd>>>>| {
-
                 queue.for_each(|mut _header, payload| {
-                    let stats_map = Arc::clone(&stats_map);
-                    let mut stats_map = stats_map.lock().unwrap();
-                    stats_map.rx_packets += 1;
-                    let data_ptr = payload.as_ptr() as usize;        
-                    let bth_hdr = data_ptr as *const BthHdr;
-                    let seq_num = {
-                        let seq_num = unsafe { (*bth_hdr).psn_seq };
-                        u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]])
-                    };
-                    if stats_map.last_seq_num > 0 {
-                        if stats_map.last_seq_num + 1 != seq_num {
-                            stats_map.out_of_order += 1;
-                            stats_map.ooo_packets.insert(seq_num);
-                            stats_map.last_expected = stats_map.last_seq_num + 1;
-                        } else {
-                            stats_map.last_seq_num = seq_num;
-                            stats_map.in_order += 1;
-                        }
-                    } else {
-                        stats_map.in_order += 1;
-                        stats_map.last_seq_num = seq_num;
+                    info!("received packet");
+                    let data_ptr = payload.as_ptr() as usize;
+                    let bth_hdr = data_ptr as *const BthHdr;     
+                    let deth_hdr = (data_ptr + BthHdr::LEN) as *mut DethHdr;
+                    let mad_hdr = (data_ptr + BthHdr::LEN + DethHdr::LEN) as *mut MadHdr;
+                    let attribute_id = u16::from_be(unsafe { (*mad_hdr).attribute_id });
+                    if attribute_id == 0x0010 {
+                        unsafe { (*mad_hdr).attribute_id = u16::to_be(0x8013) };
+                        //let connection_request_hdr = (data_ptr + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN) as *const CmConnectRequest;
+                        let mut connection_reply_hdr = CmConnectReply::default();
+                        connection_reply_hdr.local_qpn = random_id();
+                        connection_reply_hdr.starting_psn = random_id();
+                        let mut new_payload = Payload::new();
+                        new_payload.add(bth_hdr)
+                            .add(deth_hdr)
+                            .add(mad_hdr)
+                            .add(connection_reply_hdr);
+                        let packet = afxdp::Packet{
+                            path: _header.path,
+                            ecn: _header.ecn,
+                            counter: 0,
+                            data: new_payload.data.to_vec(),
+                        };
+                        let mut tx_channel = tx_channel.lock().unwrap();
+                        tx_channel.queue(|queue| {
+                            queue.push(packet.clone()).unwrap();
+                        });
                     }
-                    loop {
-                        let l = stats_map.last_seq_num + 1;
-                        if stats_map.ooo_packets.remove(&(l)){
-                            stats_map.last_seq_num += 1;
-                        } else {
-                            break;
-                        }
-                    }
-                    //info!("path {:?}", _header.path);
+                
                 });
-                //packet_list
             };
             let jh = tokio::spawn( async move{
                 af_xdp.clone().recv(rx_channel, rx_f).await;
-                //af_xdp.send(tx_channels, umem.clone(), t_rx).await;
                 Ok(())
             });
             jh_list.push(jh);
@@ -172,3 +176,31 @@ impl UdpServer{
     }
 }
 
+struct Payload{
+    data: Vec<u8>,
+}
+
+impl Payload{
+    pub fn new() -> Payload{
+        Payload{
+            data: Vec::new(),
+        }
+    }
+    fn add<T>(&mut self, t: T) -> &mut Self{
+        let buf = unsafe {
+            let ptr = &t as *const T as *const u8;
+            std::slice::from_raw_parts(ptr, std::mem::size_of::<T>())
+        };
+        self.data.extend_from_slice(buf);
+        self
+    }
+    pub fn as_slice(&self) -> &[u8]{
+        self.data.as_slice()
+    }
+}
+
+fn random_id<T>() -> T 
+where Standard: Distribution<T>
+{
+    rand::random::<T>()
+}

@@ -15,7 +15,7 @@ use network_types::{
 use aya_log_ebpf::{warn, info};
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct BthHdr{
     pub opcode: u8,
     pub sol_event: u8,
@@ -30,7 +30,16 @@ impl BthHdr {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct InvariantCrc{
+    pub crc: u32,
+}
+impl InvariantCrc {
+    pub const LEN: usize = mem::size_of::<InvariantCrc>();
+}
+
+#[repr(C, packed)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct DethHdr{
     pub queue_key: u32,
     pub res: u8,
@@ -41,7 +50,7 @@ impl DethHdr {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct MadHdr{
     pub base_version: u8,
     pub mgmt_class: u8,
@@ -60,7 +69,7 @@ impl MadHdr {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct CmConnectRequest{
     pub local_comm_id: u32,
     pub res: u32,
@@ -81,9 +90,14 @@ pub struct CmConnectRequest{
     pub max_cm_retries: u8,
     pub primary_local_port_lid: u16,
     pub primary_remote_port_lid: u16,
+    pub ghost1: [u8;10],
+    pub ghost2: u16,
     pub primary_local_port_gid: u32,
+    pub ghost3: [u8;10],
+    pub ghost4: u16,
     pub primary_remote_port_gid: u32,
     pub primary_flow_label: [u8;3],
+    pub ghost5: u8,
     pub primary_traffic_class: u8,
     pub primary_hop_limit: u8,
     pub primary_subnet_local: u8,
@@ -93,6 +107,7 @@ pub struct CmConnectRequest{
     pub alternate_local_port_gid: [u8;16],
     pub alternate_remote_port_gid: [u8;16],
     pub alternate_flow_label: [u8;3],
+    pub ghost6: u8,
     pub alternate_traffic_class: u8,
     pub alternate_hop_limit: u8,
     pub alternate_subnet_local: u8,
@@ -105,13 +120,16 @@ impl CmConnectRequest {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct IpCmPrivateData{
     pub ip_cm_major_minor_version: u8,
     pub ip_cm_ip_version: u8,
     pub ip_cm_source_port: u16,
+    pub ghost1: [u8;12],
     pub ip_cm_source_ip: u32,
+    pub ghost2: [u8;12],
     pub ip_cm_destination_ip: u32,
+    pub ip_cm_consumer_private_data: [u32;14],
 }
 
 impl IpCmPrivateData {
@@ -120,7 +138,7 @@ impl IpCmPrivateData {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct IpCmServiceId{
     pub prefix: [u8;5],
     pub protocol: u8,
@@ -132,7 +150,7 @@ impl IpCmServiceId {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct CmConnectReply{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
@@ -155,7 +173,7 @@ impl CmConnectReply {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct CmReadyToUse{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
@@ -167,7 +185,7 @@ impl CmReadyToUse {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct CmDisconnectRequest{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
@@ -179,7 +197,7 @@ impl CmDisconnectRequest {
 }
 
 #[repr(C, packed)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct CmDisconnectReply{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,

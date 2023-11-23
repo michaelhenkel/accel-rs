@@ -111,6 +111,8 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     if u16::from_be(unsafe { (*udp_hdr).dest }) != 4791 && u16::from_be(unsafe { (*udp_hdr).dest }) != 4792{
         return Ok(xdp_action::XDP_PASS);
     }
+    let ingress_if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
+    let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
     let flow_next_hop = if let Some((flow_next_hop, flow_key)) = get_v4_next_hop_from_flow_table(&ctx){
         if flow_next_hop.flowlet_size > 0 && flow_next_hop.counter % (flow_next_hop.flowlet_size + 1) == 0 {
             let packet_count = flow_next_hop.counter;
@@ -133,15 +135,13 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
             return Ok(xdp_action::XDP_PASS);
         }
     };
-    let if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
-    let statsmap = unsafe { STATSMAP.get_ptr_mut(&if_idx).ok_or(xdp_action::XDP_ABORTED)? };
-    unsafe { (*statsmap).rx += 1 };
+    
+
     unsafe { (*eth_hdr).dst_addr = flow_next_hop.dst_mac };
     unsafe { (*eth_hdr).src_addr = flow_next_hop.src_mac };
-    let if_idx = flow_next_hop.ifidx;
+    let nh_if_idx = flow_next_hop.ifidx;
 
-    let local_if_idx = unsafe { (*ctx.ctx).ingress_ifindex };
-    let queue_idx = unsafe { (*ctx.ctx).rx_queue_index };
+    
     let bth_hdr = ptr_at::<BthHdr>(&ctx, EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN).ok_or(xdp_action::XDP_ABORTED)?;
     let dest_qp = unsafe { (*bth_hdr).dest_qpn };
     let dest_qp_dec = u32::from_be_bytes([0, dest_qp[0], dest_qp[1], dest_qp[2]]);
@@ -276,16 +276,19 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                 }
             },
         }
-        let res = unsafe { bpf_redirect(if_idx, 0)};
+        let res = unsafe { bpf_redirect(nh_if_idx, 0)};
         return Ok(res as u32)
     }
 
     let op_code = u8::from_be(unsafe { (*bth_hdr).opcode });
     // we don't care for send only or ack
     if op_code == 4 || op_code == 17 {
-        let res = unsafe { bpf_redirect(if_idx, 0)};
+        let res = unsafe { bpf_redirect(nh_if_idx, 0)};
         return Ok(res as u32)
     }
+
+    let statsmap = unsafe { STATSMAP.get_ptr_mut(&ingress_if_idx).ok_or(xdp_action::XDP_ABORTED)? };
+    unsafe { (*statsmap).rx += 1 };
 
     let seq_num = unsafe { (*bth_hdr).psn_seq };
     let seq_num = u32::from_be_bytes([0, seq_num[0], seq_num[1], seq_num[2]]);
@@ -297,7 +300,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
         },
         None => {
             //info!(&ctx, "qp_state not found for qp_id {}", dest_qp_dec);
-            let res = unsafe { bpf_redirect(if_idx, 0)};
+            let res = unsafe { bpf_redirect(nh_if_idx, 0)};
             return Ok(res as u32)
         },
     };
@@ -310,23 +313,23 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
     } else {
         //info!(&ctx, "in order seq {}, expected {}", seq_num, unsafe { (*qp_state).last_psn + 1 });
         unsafe { (*qp_state).last_psn = seq_num };
-        let res = unsafe { bpf_redirect(if_idx, 0)};
+        let res = unsafe { bpf_redirect(nh_if_idx, 0)};
         return Ok(res as u32)
     }
 
-    let role = match unsafe { INTERFACECONFIGMAP.get(&local_if_idx)} {
+    let role = match unsafe { INTERFACECONFIGMAP.get(&ingress_if_idx)} {
         Some(interface_config) => {
             if interface_config.role == 0 {
                 Role::Access
             } else if interface_config.role == 1{
                 Role::Fabric
             } else {
-                info!(&ctx, "no role found for if_idx {}", local_if_idx);
+                info!(&ctx, "no role found for if_idx {}", ingress_if_idx);
                 return Ok(xdp_action::XDP_DROP)
             }
         },
         None => {
-            let res = unsafe { bpf_redirect(if_idx, 0)};
+            let res = unsafe { bpf_redirect(nh_if_idx, 0)};
             return Ok(res as u32)
         },
     };
@@ -340,12 +343,12 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
 
     match role{
         Role::Access => {
-            let res = unsafe { bpf_redirect(if_idx, 0)};
+            let res = unsafe { bpf_redirect(nh_if_idx, 0)};
             return Ok(res as u32)
         },
         Role::Fabric => {
             let interface_queue = InterfaceQueue{
-                ifidx: local_if_idx,
+                ifidx: ingress_if_idx,
                 queue: queue_idx,
             };
             let queue_idx = match unsafe { INTERFACEQUEUEMAP.get(&interface_queue )}{
@@ -362,7 +365,7 @@ fn try_router(ctx: XdpContext) -> Result<u32, u32> {
                     return Ok(res)
                 },
                 Err(_e) => {
-                    let res = unsafe { bpf_redirect(if_idx, 0)};
+                    let res = unsafe { bpf_redirect(nh_if_idx, 0)};
                     return Ok(res as u32)
                 }
             }
