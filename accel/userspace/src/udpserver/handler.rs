@@ -50,8 +50,26 @@ impl handler::ProgramHandler for UdpServerHandler{
 
         let interface_queue_map_mutex = Arc::new(Mutex::new(interface_queue_map));
 
+        let cm_state_map = if let Some(cm_state_map) = bpf.take_map("CMSTATE") {
+            AyaHashMap::try_from(cm_state_map)?
+        } else {
+            panic!("CMSTATE map not found");
+        };
+
+        let cm_state_map_mutex = Arc::new(Mutex::new(cm_state_map));
+
+        let qp_state_map = if let Some(qp_state_map) = bpf.take_map("QPSTATE") {
+            AyaHashMap::try_from(qp_state_map)?
+        } else {
+            panic!("QPSTATE map not found");
+        };
+
+        let qp_state_map_mutex = Arc::new(Mutex::new(qp_state_map));
+
+        
+
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        let udp_s = UdpServer::new(interface_map.clone(), xsk_map, interface_queue_map_mutex);
+        let udp_s = UdpServer::new(interface_map.clone(), xsk_map, interface_queue_map_mutex, cm_state_map_mutex, qp_state_map_mutex);
         let udp_server_jh = tokio::spawn(async move {
             if let Err(e) = udp_s.run(rx).await{
                 return Err(e);

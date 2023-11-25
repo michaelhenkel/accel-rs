@@ -1,6 +1,8 @@
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}};
 use aya::maps::{XskMap, MapData, HashMap as AyaHashMap};
 use common::{
+    QpState,
+    CmState,
     BthHdr,
     InterfaceQueue,
     CmConnectReply,
@@ -37,6 +39,8 @@ pub struct UdpServer{
     interface_map: HashMap<String, Interface>,
     interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>,
     xsk_map: Arc<Mutex<XskMap<MapData>>>,
+    cm_state_map: Arc<Mutex<AyaHashMap<MapData, [u8;8], CmState>>>,
+    qp_state_map: Arc<Mutex<AyaHashMap<MapData, [u8;3], QpState>>>,
 }
 
 pub enum UdpServerCommand{
@@ -59,11 +63,19 @@ pub struct StatsMap{
 }
 
 impl UdpServer{
-    pub fn new(interface_map: HashMap<String, Interface>, xsk_map: Arc<Mutex<XskMap<MapData>>>, interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>,) -> UdpServer {
+    pub fn new(
+            interface_map: HashMap<String, Interface>,
+            xsk_map: Arc<Mutex<XskMap<MapData>>>,
+            interface_queue_map: Arc<Mutex<AyaHashMap<MapData, InterfaceQueue, u32>>>,
+            cm_state_map: Arc<Mutex<AyaHashMap<MapData, [u8;8], CmState>>>,
+            qp_state_map: Arc<Mutex<AyaHashMap<MapData, [u8;3], QpState>>>,
+        ) -> UdpServer {
         UdpServer{
             interface_map,
             xsk_map,
             interface_queue_map,
+            cm_state_map,
+            qp_state_map,
         }
     }
     pub async fn run(&self, mut ctrl_rx: tokio::sync::mpsc::Receiver<UdpServerCommand>) -> anyhow::Result<()>{
@@ -120,7 +132,6 @@ impl UdpServer{
         });
         jh_list.push(jh);
         for (intf_name, intf) in &self.interface_map {
-            let stats_map = Arc::clone(&stats_map);
             let xsk_map = self.xsk_map.clone();
             info!("creating afxdp socket for interface {}", intf_name);
             let frame_size = BUFF_SIZE as u32;
@@ -128,6 +139,8 @@ impl UdpServer{
             let tx_queue_len = 8192;
             let rx_cooldown = 10;
             let interface_queue_map = Arc::clone(&self.interface_queue_map);
+            let cm_state_map = Arc::clone(&self.cm_state_map);
+            let qp_state_map = Arc::clone(&self.qp_state_map);
             let mut af_xdp = AfXdp::new(intf.idx.unwrap(), intf_name.clone(), rx_queue_len, tx_queue_len, frame_size, rx_cooldown, intf.queues.clone());
             let (rx_channel, tx_channel) = af_xdp.setup(xsk_map, interface_queue_map, 0).unwrap();
             let tx_channel = Arc::new(Mutex::new(tx_channel));
@@ -179,6 +192,29 @@ impl UdpServer{
                             connection_reply_hdr.local_qpn = random_id();
                             connection_reply_hdr.starting_psn = random_id();
                             new_payload.add(connection_reply_hdr);
+                            
+                            let starting_psn_dec = u32::from_be_bytes([0, connection_reply_hdr.starting_psn[0], connection_reply_hdr.starting_psn[1], connection_reply_hdr.starting_psn[2]]);
+                            let cm_state = &CmState{
+                                qp_id: connection_reply_hdr.local_qpn,
+                                state: 1,
+                                first_psn: starting_psn_dec,
+                            };
+                            let mut cm_state_map = cm_state_map.lock().unwrap();
+                            if cm_state_map.insert(&new_mad_hdr.transaction_id, cm_state, 0).is_err(){
+                                panic!("failed to insert cm state");
+                            }
+
+                            let qp_state = &QpState{
+                                qp_id: connection_reply_hdr.local_qpn,
+                                first_psn: starting_psn_dec,
+                                last_psn: starting_psn_dec - 1,
+                            };
+
+                            let mut qp_state_map = qp_state_map.lock().unwrap();
+                            if qp_state_map.insert(&connection_reply_hdr.local_qpn, qp_state, 0).is_err(){
+                                panic!("failed to insert qp state");
+                            }
+
                         } else if attribute_id == 0x0015{
                             new_mad_hdr.attribute_id = u16::to_be(0x0016);
                             new_payload.add(new_mad_hdr);
@@ -187,6 +223,20 @@ impl UdpServer{
                             disconnect_reply_hdr.local_comm_id = random_id();
                             disconnect_reply_hdr.remote_comm_id = unsafe { (*disconnect_request_hdr).local_comm_id };
                             new_payload.add(disconnect_reply_hdr);
+
+                            let mut cm_state_map = cm_state_map.lock().unwrap();
+                            let qp_id = if let Ok(cm_state) = cm_state_map.get(&new_mad_hdr.transaction_id, 0){
+                                cm_state.qp_id
+                            } else {
+                                panic!("failed to get cm state");
+                            };
+                            let mut qp_state_map = qp_state_map.lock().unwrap();
+                            if qp_state_map.remove(&qp_id).is_err(){
+                                panic!("failed to remove qp state");
+                            }
+                            if cm_state_map.remove(&new_mad_hdr.transaction_id).is_err(){
+                                panic!("failed to remove cm state");
+                            }
                         }
 
                         let invariant_crc = InvariantCrc{
@@ -204,8 +254,6 @@ impl UdpServer{
                         tx_channel.queue(|queue| {
                             queue.push(packet.clone()).unwrap();
                         });
-                    } else if attribute_id == 0x0015{
-
                     }
                 
                 });

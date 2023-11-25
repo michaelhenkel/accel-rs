@@ -132,8 +132,6 @@ fn try_udp_server(ctx: XdpContext) -> Result<u32, u32> {
                             qp_id,
                             first_psn: unsafe { (*cm_state).first_psn },
                             last_psn: unsafe { (*cm_state).first_psn - 1 },
-                            out_of_order: 0,
-                            rx_counter: 0,
                         };
                         QPSTATE.insert(&qp_id, &qp_state, 0).map_err(|_| xdp_action::XDP_ABORTED)?;
                     },

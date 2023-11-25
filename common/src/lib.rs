@@ -360,8 +360,6 @@ pub struct QpState{
     pub qp_id: [u8;3],
     pub first_psn: u32,
     pub last_psn: u32,
-    pub out_of_order: u32,
-    pub rx_counter: u32,
 }
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for QpState {}
