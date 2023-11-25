@@ -3,7 +3,7 @@ use log::info;
 use network_types::eth::{self, EthHdr};
 use network_types::ip::Ipv4Hdr;
 use network_types::udp::UdpHdr;
-use pnet::datalink::NetworkInterface;
+use pnet::datalink::{NetworkInterface, DataLinkSender, DataLinkReceiver};
 use pnet::ipnetwork::IpNetwork;
 use pnet::packet::Packet;
 use pnet::packet::ethernet::{MutableEthernetPacket, EtherTypes};
@@ -17,6 +17,7 @@ use rand::random;
 use futures::stream::TryStreamExt;
 use tokio::net::UdpSocket;
 use core::panic;
+use std::any;
 use std::collections::BTreeMap;
 use std::net::{SocketAddr, Ipv4Addr, IpAddr};
 use clap::Parser;
@@ -463,11 +464,11 @@ async fn main() -> anyhow::Result<()>{
     let src_port = random_src_port();
     let ipv4 = match ip {
         std::net::IpAddr::V4(ipv4) => ipv4,
-        std::net::IpAddr::V6(ipv6) => {
+        _ => {
             panic!("ipv6 not supported");
         },
     };
-    let src_ipv4 = u32::from_be_bytes(ipv4.octets());
+
     let data_ip_port = format!("{}:{}", ip.to_string(), src_port);  
     let packet_size = opt.packet_size;  
     let data_sock = UdpSocket::bind(data_ip_port).await?;
@@ -476,78 +477,43 @@ async fn main() -> anyhow::Result<()>{
     let dst_ip = remote_data_addr.ip();
     let dst_ipv4 = match dst_ip {
         std::net::IpAddr::V4(ipv4) => ipv4,
-        std::net::IpAddr::V6(ipv6) => {
+        _ => {
             panic!("ipv6 not supported");
         },
     };
-    let base_packet = MyPacket::new(dst_ipv4).await?;
-    let dst_ipv4 = u32::from_be_bytes(dst_ipv4.octets());
+    let mut base_packet = MyPacket::new(dst_ipv4).await?;
     data_sock.connect(remote_data_addr).await?;
     println!("connected to {}", data_addr);
     if opt.messages.is_some() && opt.packets.is_some() {
         println!("establishing connection");
 
-        let(mut tx, mut rx) = match pnet::datalink::channel(&base_packet.interface, Default::default()) {
-            Ok(pnet::datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => panic!("Unknown channel type"),
-            Err(e) => panic!("Error happened {}", e),
-        };
-        println!("creating connect_request");
-        let connect_request_packet = base_packet.build_connect_request();
-        println!("sending connect_request");
-        if let Some(res) = tx.send_to(connect_request_packet.as_slice(), None) {
-            match res {
-                Ok(_) => {
-                    info!("connect_request packet sent");
-                },
-                Err(e) => {
-                    panic!("failed to send connect_request: {:?}", e);
-                }
-            }
-        } else {
-            panic!("failed to send connect_request");
-        }
-        println!("waiting for connect_reply");
-
-        let start = tokio::time::Instant::now();
-        let timeout = tokio::time::Duration::from_secs(2);
-
-        loop {
-            if start.elapsed() > timeout {
-                panic!("timeout");
-            }
-            let buf = rx.next().unwrap();
-            let bth_hdr = unsafe {
-                let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN] as *const u8 as *const BthHdr;
-                *ptr
+        let (qp_id, starting_psn) = if base_packet.create_qp().is_ok(){
+            let qp_id = if let Some(qp_id) = base_packet.remote_qp_id{
+                qp_id
+            } else {
+                panic!("qp id not found");
             };
-            let op_code = u8::from_be(bth_hdr.opcode);
-            let qpn = u32::from_be_bytes([0, bth_hdr.dest_qpn[0], bth_hdr.dest_qpn[1], bth_hdr.dest_qpn[2]]);
-            if op_code == 100 && qpn == 1 {
-                let mad_hdr = unsafe {
-                    let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN] as *const u8 as *const MadHdr;
-                    *ptr
-                };
-                let attribute_id = u16::from_be(mad_hdr.attribute_id);
-                if attribute_id == 0x0013 {
-                    let ready_to_use = base_packet.build_ready_to_use();
-                    println!("sending ready_to_use");
-                    if let Some(res) = tx.send_to(ready_to_use.as_slice(), None) {
-                        match res {
-                            Ok(_) => {
-                                info!("ready_to_use packet sent");
-                                break;
-                            },
-                            Err(e) => {
-                                panic!("failed to send ready_to_use: {:?}", e);
-                            }
-                        }
-                    } else {
-                        panic!("failed to send ready_to_use");
-                    }
-                }
-            }
+            let starting_psn = if let Some(starting_psn) = base_packet.start_psn{
+                starting_psn
+            } else {
+                panic!("starting psn not found");
+            };
+            (qp_id, starting_psn)
+        } else {
+            panic!("error creating qp");
+        };
 
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        let qp_id_dec = u32::from_be_bytes([0, qp_id[0], qp_id[1], qp_id[2]]);
+        let seq_num_dec = u32::from_be_bytes([starting_psn[0], starting_psn[1], starting_psn[2], 0]);
+
+        send_messages(&data_sock, opt.messages.unwrap(), opt.packets.unwrap(), qp_id_dec, seq_num_dec, packet_size, opt.delay).await?;
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        if base_packet.destroy_qp().is_err(){
+            panic!("error destroying qp");
         }
 
         /* 
@@ -560,7 +526,7 @@ async fn main() -> anyhow::Result<()>{
         let qp_id_dec = u32::from_be_bytes([0, qp_id[0], qp_id[1], qp_id[2]]);
         let seq_num = cm_handler.starting_psn;
         let seq_num_dec = u32::from_be_bytes([seq_num[0], seq_num[1], seq_num[2], 0]);
-        send_messages(&data_sock, opt.messages.unwrap(), opt.packets.unwrap(), qp_id_dec, seq_num_dec, packet_size, opt.delay).await?;
+        
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         cm_handler.send_disconnect_request(&data_sock).await?;
         cm_handler.wait_for_disconnect_reply(&data_sock).await?;
@@ -606,6 +572,14 @@ struct MyPacket{
     udp_dst_port: u16,
     gw: Ipv4Addr,
     interface: NetworkInterface,
+    start_psn: Option<[u8;3]>,
+    local_qp_id: Option<[u8;3]>,
+    remote_qp_id: Option<[u8;3]>,
+    local_communicaton_id: Option<u32>,
+    remote_communicaton_id: Option<u32>,
+    transaction_id: Option<[u8;8]>,
+    tx: Box<dyn DataLinkSender>,
+    rx: Box<dyn DataLinkReceiver>,
 }
 
 
@@ -636,6 +610,13 @@ impl MyPacket{
         } else {
             panic!("error getting dst mac");
         };
+
+        let(tx, rx) = match pnet::datalink::channel(&interface, Default::default()) {
+            Ok(pnet::datalink::Channel::Ethernet(tx, rx)) => (tx, rx),
+            Ok(_) => panic!("Unknown channel type"),
+            Err(e) => panic!("Error happened {}", e),
+        };
+
         Ok(Self{
             oif,
             src_ip,
@@ -646,6 +627,14 @@ impl MyPacket{
             udp_dst_port: 4791,
             gw,
             interface,
+            start_psn: None,
+            local_qp_id: None,
+            remote_qp_id: None,
+            local_communicaton_id: None,
+            remote_communicaton_id: None,
+            transaction_id: None,
+            tx,
+            rx,
         })
     }
     fn ethernet_hdr(&self) -> Vec<u8>{
@@ -679,14 +668,14 @@ impl MyPacket{
     fn udp_hdr(&self) -> Vec<u8>{
         let mut udp_buffer = [0u8; 8];
         let mut udp_packet = MutableUdpPacket::new(&mut udp_buffer).unwrap();
-        udp_packet.set_source(random_src_port());
+        udp_packet.set_source(self.udp_src_port);
         udp_packet.set_destination(4791);
         udp_packet.set_length(288);
         udp_packet.set_checksum(0);
         udp_packet.packet().to_vec()
     }
 
-    fn connect_request(&self) -> Vec<u8> {
+    fn connect_request(&mut self) -> Vec<u8> {
         let mut bth_hdr = BthHdr::default();
         bth_hdr.opcode = u8::to_be(100);
         bth_hdr.dest_qpn = [0,0,1];
@@ -695,7 +684,7 @@ impl MyPacket{
         let q_key: u32 = 0x0000000080010000;
         deth_hdr.queue_key = u32::to_be(q_key);
         let mut mad_hdr = MadHdr::default();
-        let tid: u64 = 0x0000000431544453;
+        let tid: u64 = random_id();
         let tid_as_u8 = tid.to_be_bytes();
         mad_hdr.attribute_id = u16::to_be(0x0010);
         mad_hdr.transaction_id = tid_as_u8;
@@ -704,8 +693,7 @@ impl MyPacket{
         mad_hdr.class_version = u8::to_be(0x02);
         mad_hdr.method = u8::to_be(0x03);
         let mut cm_connect_request_hdr = CmConnectRequest::default();
-        let local_comm_id: u32 = 0x53445431;
-        cm_connect_request_hdr.local_comm_id = u32::to_be(local_comm_id);
+        cm_connect_request_hdr.local_comm_id = u32::to_be(random_id());
         cm_connect_request_hdr.ip_cm_service_id = IpCmServiceId{
             prefix: [0,0,0,0,1],
             protocol: u8::to_be(0x06),
@@ -739,6 +727,10 @@ impl MyPacket{
             ip_cm_source_ip: u32::to_be(src_ip),
             ip_cm_consumer_private_data: [0;14],
         };
+        self.local_qp_id = Some(cm_connect_request_hdr.local_qpn);
+        self.local_communicaton_id = Some(cm_connect_request_hdr.local_comm_id);
+        self.transaction_id = Some(mad_hdr.transaction_id);
+    
         let invariant_crc = InvariantCrc{
             crc: random_id(),
         };
@@ -761,10 +753,8 @@ impl MyPacket{
         let q_key: u32 = 0x0000000080010000;
         deth_hdr.queue_key = u32::to_be(q_key);
         let mut mad_hdr = MadHdr::default();
-        let tid: u64 = 0x0000000431544453;
-        let tid_as_u8 = tid.to_be_bytes();
         mad_hdr.attribute_id = u16::to_be(0x0014);
-        mad_hdr.transaction_id = tid_as_u8;
+        mad_hdr.transaction_id = self.transaction_id.unwrap();
         mad_hdr.mgmt_class = u8::to_be(0x07);
         mad_hdr.base_version = u8::to_be(0x01);
         mad_hdr.class_version = u8::to_be(0x02);
@@ -783,7 +773,48 @@ impl MyPacket{
         b.to_vec()
     }
 
-    fn build_connect_request(&self) -> Vec<u8>{
+    fn disconnect_request(&self) -> Vec<u8> {
+        let mut bth_hdr = BthHdr::default();
+        bth_hdr.opcode = u8::to_be(100);
+        bth_hdr.dest_qpn = [0,0,1];
+        let mut deth_hdr = DethHdr::default();
+        deth_hdr.src_qpn = [0,0,1];
+        let q_key: u32 = 0x0000000080010000;
+        deth_hdr.queue_key = u32::to_be(q_key);
+        let mut mad_hdr = MadHdr::default();
+        mad_hdr.attribute_id = u16::to_be(0x0015);
+        mad_hdr.transaction_id = self.transaction_id.unwrap();
+        mad_hdr.mgmt_class = u8::to_be(0x07);
+        mad_hdr.base_version = u8::to_be(0x01);
+        mad_hdr.class_version = u8::to_be(0x02);
+        mad_hdr.method = u8::to_be(0x03);
+        let mut disconnect_request_hdr = CmDisconnectRequest::default();
+        disconnect_request_hdr.local_comm_id = self.local_communicaton_id.unwrap();
+        disconnect_request_hdr.remote_comm_id = self.remote_communicaton_id.unwrap();
+        disconnect_request_hdr.remote_qpn_eecn = self.remote_qp_id.unwrap();
+        let invariant_crc = InvariantCrc{
+            crc: random_id(),
+        };
+        let mut buf = Buffer::new();
+        let b = buf.add(bth_hdr)
+            .add(deth_hdr)
+            .add(mad_hdr)
+            .add(disconnect_request_hdr)
+            .add(invariant_crc)
+            .as_slice();
+        b.to_vec()
+    }
+
+    fn build_disconnect_request(&self) -> Vec<u8>{
+        let mut buf = Vec::new();
+        buf.extend_from_slice(self.ethernet_hdr().as_slice());
+        buf.extend_from_slice(self.ip_hdr().as_slice());
+        buf.extend_from_slice(self.udp_hdr().as_slice());
+        buf.extend_from_slice(self.disconnect_request().as_slice());
+        buf
+    }
+
+    fn build_connect_request(&mut self) -> Vec<u8>{
         let mut buf = Vec::new();
         buf.extend_from_slice(self.ethernet_hdr().as_slice());
         buf.extend_from_slice(self.ip_hdr().as_slice());
@@ -799,6 +830,113 @@ impl MyPacket{
         buf.extend_from_slice(self.udp_hdr().as_slice());
         buf.extend_from_slice(self.ready_to_use().as_slice());
         buf
+    }
+
+    fn destroy_qp(&mut self) -> anyhow::Result<()>{
+        println!("destroying qp");
+        let disconnect_request = self.build_disconnect_request();
+        if let Some(res) = self.tx.send_to(disconnect_request.as_slice(), None) {
+            match res {
+                Ok(_) => {
+                    println!("disconnect_request packet sent");
+                },
+                Err(e) => {
+                    panic!("failed to send disconnect_request: {:?}", e);
+                }
+            }
+        } else {
+            panic!("failed to send disconnect_request");
+        }
+        println!("waiting for disconnect_reply");
+        let start = tokio::time::Instant::now();
+        let timeout = tokio::time::Duration::from_secs(2);
+        loop {
+            if start.elapsed() > timeout {
+                panic!("timeout");
+            }
+            let buf = self.rx.next().unwrap();
+            let bth_hdr = unsafe {
+                let ptr: *const BthHdr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN] as *const u8 as *const BthHdr;
+                *ptr
+            };
+            let op_code = u8::from_be(bth_hdr.opcode);
+            let qpn = u32::from_be_bytes([0, bth_hdr.dest_qpn[0], bth_hdr.dest_qpn[1], bth_hdr.dest_qpn[2]]);
+            if op_code == 100 && qpn == 1 {
+                let mad_hdr = unsafe {
+                    let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN] as *const u8 as *const MadHdr;
+                    *ptr
+                };
+                let attribute_id = u16::from_be(mad_hdr.attribute_id);
+                if attribute_id == 0x0016 {
+                    println!("disconnect_reply received");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    fn create_qp(&mut self) -> anyhow::Result<()>{
+
+        let connect_request_packet = self.build_connect_request();
+        println!("sending connect_request");
+        if let Some(res) = self.tx.send_to(connect_request_packet.as_slice(), None) {
+            match res {
+                Ok(_) => {
+                    info!("connect_request packet sent");
+                },
+                Err(e) => {
+                    panic!("failed to send connect_request: {:?}", e);
+                }
+            }
+        } else {
+            panic!("failed to send connect_request");
+        }
+        println!("waiting for connect_reply");
+        let start = tokio::time::Instant::now();
+        let timeout = tokio::time::Duration::from_secs(2);
+        loop {
+            if start.elapsed() > timeout {
+                panic!("timeout");
+            }
+            let buf = self.rx.next().unwrap();
+            let bth_hdr = unsafe {
+                let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN] as *const u8 as *const BthHdr;
+                *ptr
+            };
+            let op_code = u8::from_be(bth_hdr.opcode);
+            let qpn = u32::from_be_bytes([0, bth_hdr.dest_qpn[0], bth_hdr.dest_qpn[1], bth_hdr.dest_qpn[2]]);
+            if op_code == 100 && qpn == 1 {
+                let mad_hdr = unsafe {
+                    let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN] as *const u8 as *const MadHdr;
+                    *ptr
+                };
+                let attribute_id = u16::from_be(mad_hdr.attribute_id);
+                if attribute_id == 0x0013 {
+                    let connect_reply_hdr = unsafe {
+                        let ptr = &buf[EthHdr::LEN + Ipv4Hdr::LEN + UdpHdr::LEN + BthHdr::LEN + DethHdr::LEN + MadHdr::LEN] as *const u8 as *const CmConnectReply;
+                        *ptr
+                    };
+                    self.remote_communicaton_id = Some(connect_reply_hdr.local_comm_id);
+                    self.remote_qp_id = Some(connect_reply_hdr.local_qpn);
+                    self.start_psn = Some(connect_reply_hdr.starting_psn);
+                    let ready_to_use = self.build_ready_to_use();
+                    println!("sending ready_to_use");
+                    if let Some(res) = self.tx.send_to(ready_to_use.as_slice(), None) {
+                        match res {
+                            Ok(_) => {
+                                println!("ready_to_use packet sent");
+                                return Ok(());
+                            },
+                            Err(e) => {
+                                panic!("failed to send ready_to_use: {:?}", e);
+                            }
+                        }
+                    } else {
+                        panic!("failed to send ready_to_use");
+                    }
+                }
+            }
+        }
     }
 }
 

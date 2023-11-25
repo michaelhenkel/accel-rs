@@ -195,6 +195,9 @@ pub struct CmDisconnectRequest{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
     pub remote_qpn_eecn: [u8;3],
+    pub res: u8,
+    pub private_data_1: [u32;32],
+    pub private_data_2: [u32;23],
 }
 
 impl CmDisconnectRequest {
@@ -206,6 +209,8 @@ impl CmDisconnectRequest {
 pub struct CmDisconnectReply{
     pub local_comm_id: u32,
     pub remote_comm_id: u32,
+    pub private_data_1: [u32;32],
+    pub private_data_2: [u32;24],
 }
 
 impl CmDisconnectReply {
@@ -355,8 +360,8 @@ pub struct QpState{
     pub qp_id: [u8;3],
     pub first_psn: u32,
     pub last_psn: u32,
-    pub in_order: u8,
-    pub state: u8,
+    pub out_of_order: u32,
+    pub rx_counter: u32,
 }
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for QpState {}
@@ -366,8 +371,6 @@ unsafe impl aya::Pod for QpState {}
 pub struct CmState{
     pub qp_id: [u8;3],
     pub first_psn: u32,
-    pub last_psn: u32,
-    pub in_order: u8,
     pub state: u8,
 }
 #[cfg(feature = "user")]

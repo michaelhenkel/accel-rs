@@ -4,7 +4,6 @@ use aya::{include_bytes_aligned, Bpf, maps::{LpmTrie, MapData, XskMap, HashMap a
 use cli_server::StatsMsg;
 use common::RouteNextHop;
 use log::info;
-use pnet::packet::icmp::echo_reply::MutableEchoReplyPacket;
 use tokio::task::JoinHandle;
 use crate::handler::handler::{self, StatsHandler};
 use super::super::config::config::{Interface, LoadBalancer};
